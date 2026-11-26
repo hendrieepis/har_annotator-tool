@@ -1,4 +1,4 @@
-# HAR Dataset Annotator
+# HAR Dataset Annotator=
 
 Aplikasi desktop khusus untuk mengubah **video mentah Human Activity
 Recognition (HAR)** menjadi **klip dataset pendek yang berisi satu lintasan
