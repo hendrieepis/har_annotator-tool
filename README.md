@@ -1,4 +1,4 @@
-# HAR Dataset Annotator=
+# HAR Dataset Annotator
 
 Aplikasi desktop khusus untuk mengubah **video mentah Human Activity
 Recognition (HAR)** menjadi **klip dataset pendek yang berisi satu lintasan
@@ -48,19 +48,106 @@ yang ditentukan operator. Dua preset lain tersedia di UI:
 Pemotongan bersifat *frame-exact*: `-ss` melakukan seek input yang cepat dan
 akurat, lalu `-frames:v N` menulis tepat sejumlah frame inklusif yang ditandai.
 
+## Repositori GitHub
+
+Kode sumber: **https://github.com/hendrieepis/har_annotator-tool**
+
 ## Kebutuhan Sistem
 
-- Python 3.10+
-- `ffmpeg` / `ffprobe` tersedia di `PATH`
-- Paket Python: `pip install -r requirements.txt` (otomatis di `.venv/` saat menjalankan `har-annotator`)
+| Kebutuhan | Keterangan |
+|---|---|
+| Python | 3.10 atau lebih baru (`python3 --version`) |
+| ffmpeg + ffprobe | Wajib untuk memotong klip; harus ada di `PATH` |
+| Git | Untuk mengunduh (clone) dari GitHub |
+| Layar grafis | Aplikasi ini GUI desktop (Linux/macOS/Windows) |
+
+Paket Python (PySide6, PyAV) **diinstal otomatis** oleh `har-annotator` pada
+run pertama ke dalam `.venv/` di folder proyek, jadi tidak perlu
+`pip install` manual dan tidak mengotori Python sistem.
+
+### Instal Git dan ffmpeg
+
+| Sistem | Perintah |
+|---|---|
+| Ubuntu / Debian | `sudo apt update && sudo apt install -y git ffmpeg python3 python3-venv` |
+| macOS (Homebrew) | `brew install git ffmpeg python` |
+| Windows | Instal [Git for Windows](https://git-scm.com/download/win) (sudah termasuk *Git Bash*), [Python](https://www.python.org/downloads/) (centang *Add to PATH*), dan ffmpeg (`winget install ffmpeg`) |
+
+Cek: `ffmpeg -version` dan `ffprobe -version` harus menampilkan versi.
+
+## Mengunduh dari GitHub
+
+```bash
+git clone https://github.com/hendrieepis/har_annotator-tool.git
+cd har_annotator-tool
+```
+
+Tanpa Git, bisa juga unduh ZIP: buka halaman repositori → tombol hijau
+**Code** → **Download ZIP**, lalu ekstrak.
+
+> Nama folder hasil unduhan bebas (mis. `har_annotator-tool` atau
+> `har_annotator-tool-main`); aplikasi tetap jalan.
 
 ## Menjalankan
 
+**Linux / macOS** (dari dalam folder hasil clone):
+
 ```bash
 ./har-annotator
-# atau lewat symlink di PATH:
-# ln -sfn "$PWD/har-annotator" ~/.local/bin/har-annotator && har-annotator
 ```
+
+Jika muncul `Permission denied`: `chmod +x har-annotator`.
+
+**Windows** (belum diuji): buka **Git Bash** di folder proyek, lalu jalankan
+`./har-annotator` (atau pakai WSL). Cara manual tanpa Bash (`mklink` perlu
+PowerShell/CMD sebagai Administrator):
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+mkdir .pkgroot
+mklink /D .pkgroot\har_annotator ..
+set PYTHONPATH=.pkgroot
+.venv\Scripts\python -m har_annotator
+```
+
+Pada run pertama `har-annotator` membuat `.venv/` dan mengunduh dependensi
+(butuh internet, beberapa menit). Run berikutnya langsung membuka aplikasi.
+
+### Menjalankan dari folder mana pun (opsional)
+
+```bash
+mkdir -p ~/.local/bin
+ln -sfn "$PWD/har-annotator" ~/.local/bin/har-annotator
+har-annotator          # sekarang bisa dipanggil dari folder mana saja
+```
+
+Pastikan `~/.local/bin` ada di `PATH`. Jika folder proyek dipindah, buat ulang
+symlink-nya dengan perintah yang sama.
+
+### Memperbarui ke versi terbaru
+
+```bash
+cd har_annotator-tool
+git pull
+```
+
+### Opsi lanjutan
+
+| Variabel | Fungsi |
+|---|---|
+| `PYTHON=/path/ke/python3 ./har-annotator` | Pakai interpreter tertentu (lewati pembuatan `.venv`) |
+| `HAR_NO_VENV=1 ./har-annotator` | Jangan buat `.venv`; pakai `python3` yang ada |
+
+### Pemecahan Masalah
+
+| Gejala | Solusi |
+|---|---|
+| `warning: 'ffmpeg' not on PATH` | Instal ffmpeg (lihat tabel di atas); export klip tidak akan jalan tanpanya |
+| `python3 not found` / `No module named venv` | Ubuntu: `sudo apt install python3 python3-venv` |
+| `Could not find the Qt platform plugin "xcb"` | Ubuntu: `sudo apt install libxcb-cursor0 libxkbcommon-x11-0` |
+| Gagal saat menginstal dependensi | Cek koneksi internet, hapus `.venv/`, jalankan ulang |
+| Ingin mengulang instalasi bersih | `rm -rf .venv` lalu `./har-annotator` |
 
 > **Catatan lingkungan conda:** entry point sudah otomatis mengarahkan Qt ke
 > folder plugin milik PySide6. Ini mencegah error
@@ -130,7 +217,7 @@ urutan kemunculan arah pada nama file sumber.
 ## Struktur Project
 
 ```
-./                      # root repo = package `har_annotator` (nama folder bebas)
+./                       # root repo = package `har_annotator` (nama folder bebas)
   har-annotator          # launcher (bash): venv, deps, PYTHONPATH
   requirements.txt
   app.py                 # entry point (python -m har_annotator)
