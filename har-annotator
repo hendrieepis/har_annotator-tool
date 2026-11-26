@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Launch the HAR Dataset Annotator.
+#
+# Self-contained: copy this whole folder anywhere (any folder name) and run
+# ./run.sh from any cwd (symlinks OK). On first run it creates ./.venv next to
+# this script and installs requirements.txt, unless the Python found already
+# has the dependencies. ffmpeg/ffprobe must be on PATH for clip export.
+#
+# Env overrides:
+#   PYTHON=/path/to/python3   interpreter to use (skips .venv bootstrap)
+#   HAR_NO_VENV=1             never create .venv; use the current python3
+set -euo pipefail
+
+# Resolve the real script dir (follows symlinks, independent of cwd).
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  DIR="$(cd -P "$(dirname "$SRC")" && pwd)"
+  SRC="$(readlink "$SRC")"
+  [[ "$SRC" != /* ]] && SRC="$DIR/$SRC"
+done
+APP="$(cd -P "$(dirname "$SRC")" && pwd)"   # .../har_annotator
+PKG="har_annotator"                         # import name (fixed; folder may be renamed)
+# Expose this folder as an importable `har_annotator` package regardless of
+# what the folder is called (e.g. "har_annotator-tool").
+PKGROOT="$APP/.pkgroot"
+mkdir -p "$PKGROOT"
+[ "$(readlink "$PKGROOT/$PKG" 2>/dev/null)" = ".." ] || ln -sfn .. "$PKGROOT/$PKG"
+
+have_deps() { "$1" -c 'import PySide6, av' >/dev/null 2>&1; }
+
+if [ -n "${PYTHON:-}" ]; then
+  PY="$PYTHON"
+elif [ -x "$APP/.venv/bin/python" ]; then
+  PY="$APP/.venv/bin/python"
+else
+  BASE="$(command -v python3 || true)"
+  [ -n "$BASE" ] || { echo "error: python3 not found on PATH" >&2; exit 1; }
+  if have_deps "$BASE" || [ -n "${HAR_NO_VENV:-}" ]; then
+    PY="$BASE"
+  else
+    echo "First run: creating $APP/.venv and installing requirements..." >&2
+    "$BASE" -m venv "$APP/.venv"
+    "$APP/.venv/bin/python" -m pip install -q -r "$APP/requirements.txt"
+    PY="$APP/.venv/bin/python"
+  fi
+fi
+
+if ! have_deps "$PY"; then
+  echo "error: $PY lacks PySide6/av. Run: $PY -m pip install -r $APP/requirements.txt" >&2
+  exit 1
+fi
+
+for bin in ffmpeg ffprobe; do
+  command -v "$bin" >/dev/null 2>&1 || \
+    echo "warning: '$bin' not on PATH; clip export will not work." >&2
+done
+
+if [ -z "${QT_QPA_PLATFORM:-}" ] && [ -z "${DISPLAY:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  export QT_QPA_PLATFORM=wayland
+fi
+
+# Make the package importable without changing cwd (relative args keep working).
+export PYTHONPATH="$PKGROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m "$PKG" "$@"

@@ -1,0 +1,3 @@
+PySide6>=6.6
+av>=11.0          # PyAV — frame decoding for preview (no Qt clash, unlike opencv-python)
+# ffmpeg / ffprobe must be installed separately and available on PATH.

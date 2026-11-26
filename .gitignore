@@ -1,0 +1,13 @@
+# Launcher-generated
+.venv/
+.pkgroot/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
