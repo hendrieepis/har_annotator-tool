@@ -114,10 +114,14 @@ class AnnotationSession:
         if direction is None:
             target = self.next_target()
         else:
-            same = sum(
+            used = {c.filename for c in (*self.pending, *self.exported)}
+            repetition = 1 + sum(
                 1 for c in (*self.pending, *self.exported) if c.direction == direction
             )
-            target = self.spec.name_for(self.next_index, direction, same + 1)
+            target = self.spec.name_for(self.next_index, direction, repetition)
+            while target.filename in used:  # a deleted clip left a gap: skip taken names
+                repetition += 1
+                target = self.spec.name_for(self.next_index, direction, repetition)
         record = ClipRecord(
             index=target.index,
             direction=target.direction,
@@ -157,6 +161,24 @@ class AnnotationSession:
         self.exported.sort(key=lambda c: c.index)
         self.save_pending()
         self.save_exported()
+
+    def delete_exported(self, records: list[ClipRecord]) -> list[ClipRecord]:
+        """Delete exported clips: remove the files and forget them in the state.
+
+        A file that is already gone is not an error (the record is still
+        dropped). Returns the records that were removed. Frames of the source
+        video are never touched, so the clip can simply be marked again.
+        """
+        gone = {r.index for r in records}
+        removed = [e for e in self.exported if e.index in gone]
+        for rec in removed:
+            try:
+                (self.output_dir / rec.filename).unlink(missing_ok=True)
+            except OSError as exc:
+                raise OSError(f"Cannot delete {rec.filename}: {exc}") from exc
+        self.exported = [e for e in self.exported if e.index not in gone]
+        self.save_exported()
+        return removed
 
     # ----- persistence -------------------------------------------------
     def _state_dir(self) -> Path:

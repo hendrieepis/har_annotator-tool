@@ -136,3 +136,48 @@ def test_add_mark_rejects_same_start_and_end(tmp_path):
     with pytest.raises(ValueError):
         s.add_mark(20, 10)
     assert s.pending == []
+
+
+def test_delete_exported_removes_file_and_state(tmp_path):
+    from har_annotator.core.naming import FilenameSpec
+    from har_annotator.core.session import AnnotationSession
+
+    src = tmp_path / "P001_BRJ_KRKN_KNKR_CEPAT.mp4"
+    src.write_bytes(b"x")
+    out = tmp_path / "clips"
+    out.mkdir()
+    s = AnnotationSession.load_or_create(src, out, FilenameSpec.parse(src))
+    recs = []
+    for i in range(3):
+        r = s.add_mark(i * 10, i * 10 + 5)
+        (out / r.filename).write_bytes(b"clip")
+        s.mark_exported(r)
+        recs.append(r)
+
+    removed = s.delete_exported([recs[1], recs[1]])
+    assert [r.index for r in removed] == [recs[1].index]
+    assert not (out / recs[1].filename).exists()
+    assert (out / recs[0].filename).exists() and (out / recs[2].filename).exists()
+    reloaded = AnnotationSession.load_or_create(src, out, FilenameSpec.parse(src))
+    assert [e.index for e in reloaded.exported] == [recs[0].index, recs[2].index]
+    # already-missing file is fine
+    (out / recs[0].filename).unlink()
+    assert len(s.delete_exported([recs[0]])) == 1
+
+
+def test_auto_names_skip_taken_after_delete(tmp_path):
+    from har_annotator.core.naming import FilenameSpec
+    from har_annotator.core.session import AnnotationSession
+
+    src = tmp_path / "P001_BRJ_KRKN_KNKR_CEPAT.mp4"
+    src.write_bytes(b"x")
+    s = AnnotationSession.load_or_create(src, tmp_path, FilenameSpec.parse(src))
+    recs = []
+    for i in range(3):
+        r = s.add_mark(i * 10, i * 10 + 5, direction="KRKN")
+        s.mark_exported(r)
+        recs.append(r)
+    s.delete_exported([recs[0]])             # leaves _02 and _03
+    new = s.add_mark(100, 110, direction="KRKN")
+    taken = {e.filename for e in s.exported}
+    assert new.filename not in taken

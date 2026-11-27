@@ -52,6 +52,7 @@ from har_annotator.core.session import (
     counts_per_direction,
 )
 from har_annotator.ui.auto_worker import TrajectoryWorker
+from har_annotator.ui.clip_player import ClipPlayerDialog
 from har_annotator.ui.export_worker import BatchExportWorker
 from har_annotator.ui.player import VideoPlayerWidget
 
@@ -81,6 +82,7 @@ class MainWindow(QWidget):
         self._analysis_play = False          # analysis was started by Play
         self._auto_chain = False             # keep exporting until nothing is left
         self._auto_queue: list = []          # detected passes still ahead
+        self._clip_dialog: ClipPlayerDialog | None = None
         self._auto_stats = {"added": 0, "dup": 0}
 
         self._build_ui()
@@ -328,8 +330,32 @@ class MainWindow(QWidget):
         dv = QVBoxLayout(done_box)
         self.lbl_counts = QLabel("—")
         self.exported_list = QListWidget()
+        self.exported_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.exported_list.setToolTip(
+            "Double-click a clip to play it here; select clips and press Delete"
+        )
+        self.exported_list.itemDoubleClicked.connect(self._play_exported)
+        self.exported_list.itemSelectionChanged.connect(self._update_action_buttons)
+        self.btn_play_clip = QPushButton("▶ Play clip")
+        self.btn_play_clip.clicked.connect(self.play_selected_clip)
+        self.btn_delete_clip = QPushButton("🗑 Delete selected")
+        self.btn_delete_clip.setToolTip(
+            "Delete the selected clip files and remove them from the exported list"
+        )
+        self.btn_delete_clip.clicked.connect(self.delete_selected_clips)
+        clip_row = QHBoxLayout()
+        clip_row.addWidget(self.btn_play_clip)
+        clip_row.addWidget(self.btn_delete_clip)
         dv.addWidget(self.lbl_counts)
         dv.addWidget(self.exported_list, 1)
+        dv.addLayout(clip_row)
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Delete), self.exported_list,
+            activated=self.delete_selected_clips,
+            context=Qt.ShortcutContext.WidgetShortcut,
+        )
         rl.addWidget(done_box, 1)
 
         return right
@@ -395,6 +421,8 @@ class MainWindow(QWidget):
             return
         if self._worker is not None:
             return  # don't switch source mid-export
+        if self._clip_dialog is not None:
+            self._clip_dialog.close()    # its clip list belongs to the old video
         item = self.video_list.item(row)
         path = Path(item.data(Qt.ItemDataRole.UserRole))
         try:
@@ -685,6 +713,12 @@ class MainWindow(QWidget):
         )
         self.btn_redo_mark.setEnabled(
             not running and bool(self.session and self.session.can_redo)
+        )
+        has_clips = bool(self.session and self.session.exported)
+        self.btn_play_clip.setEnabled(has_clips)
+        self.btn_delete_clip.setEnabled(
+            has_clips and not running and not self._auto_active
+            and bool(self.exported_list.selectedItems())
         )
 
     # ------------------------------------------------- markers & auto clip
@@ -1056,9 +1090,112 @@ class MainWindow(QWidget):
         )
         self.exported_list.clear()
         for c in self.session.exported:
-            self.exported_list.addItem(
+            item = QListWidgetItem(
                 f"{c.filename}   [f{c.start_frame}–{c.end_frame}]"
             )
+            item.setData(Qt.ItemDataRole.UserRole, c.index)
+            self.exported_list.addItem(item)
+        self._update_action_buttons()
+
+    # ------------------------------------------------- watch / delete clips
+    def _selected_exported(self) -> list[ClipRecord]:
+        if self.session is None:
+            return []
+        by_index = {e.index: e for e in self.session.exported}
+        return [
+            by_index[i]
+            for i in (
+                it.data(Qt.ItemDataRole.UserRole)
+                for it in self.exported_list.selectedItems()
+            )
+            if i in by_index
+        ]
+
+    def _play_exported(self, item: QListWidgetItem) -> None:
+        if self.session is None:
+            return
+        self._open_clip_player(item.data(Qt.ItemDataRole.UserRole))
+
+    def play_selected_clip(self) -> None:
+        sel = self._selected_exported()
+        if sel:
+            self._open_clip_player(sel[0].index)
+        elif self.session is not None and self.session.exported:
+            self._open_clip_player(self.session.exported[0].index)
+
+    def _open_clip_player(self, index: int) -> None:
+        if self.session is None or self.output_dir is None:
+            return
+        exported = self.session.exported
+        paths = [self.output_dir / c.filename for c in exported]
+        row = next((i for i, c in enumerate(exported) if c.index == index), 0)
+        if not paths[row].exists():
+            QMessageBox.warning(
+                self, "File missing",
+                f"{paths[row].name} is not on disk (deleted outside the app?).",
+            )
+            return
+        if self.player.is_playing:
+            self.player.stop()
+        if self._clip_dialog is None:
+            self._clip_dialog = ClipPlayerDialog(self)
+            self._clip_dialog.deleteRequested.connect(self._delete_from_player)
+        self._clip_dialog.open_clips(paths, row)
+        self._clip_dialog.show()
+        self._clip_dialog.raise_()
+
+    def _delete_from_player(self, filename: str) -> None:
+        if self.session is None:
+            return
+        rec = next((e for e in self.session.exported if e.filename == filename), None)
+        if rec is None:
+            return
+        dlg = self._clip_dialog
+        if dlg is not None:
+            dlg.release_current()        # free the file before deleting it
+        if self._delete_clips([rec], parent=dlg):
+            if dlg is not None:
+                dlg.remove_clip(filename)
+        elif dlg is not None:
+            dlg.reload_current()
+
+    def delete_selected_clips(self) -> None:
+        records = self._selected_exported()
+        if not records:
+            QMessageBox.information(
+                self, "Select clips",
+                "Select one or more clips in the exported list first.",
+            )
+            return
+        self._delete_clips(records)
+
+    def _delete_clips(self, records: list[ClipRecord], parent=None) -> bool:
+        if self.session is None or not records or self._worker is not None:
+            return False
+        if self._auto_active:
+            return False
+        names = "\n".join(r.filename for r in records[:8])
+        if len(records) > 8:
+            names += f"\n… and {len(records) - 8} more"
+        answer = QMessageBox.question(
+            parent or self, "Delete clips",
+            f"Delete {len(records)} clip file(s) from disk?\n\n{names}\n\n"
+            "The source video is not touched; you can mark the clip again.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        try:
+            removed = self.session.delete_exported(records)
+        except OSError as exc:
+            QMessageBox.critical(self, "Delete failed", str(exc))
+            self._refresh_all()
+            return False
+        self._refresh_all()
+        self._refresh_current_list_item()
+        self.status.setText(f"Deleted {len(removed)} clip(s).")
+        return True
 
     def _refresh_current_list_item(self) -> None:
         row = self.video_list.currentRow()
