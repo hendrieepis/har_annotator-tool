@@ -23,7 +23,7 @@ from typing import Callable
 
 import numpy as np
 
-from .markers import DIRECTION_RULES, MarkerSet, start_stop_keys
+from .markers import MarkerSet, active_directions, sense_keys
 
 SMALL_W, SMALL_H = 128, 72     # analysis resolution
 DIFF_THRESHOLD = 25            # gray-level difference that counts as motion
@@ -74,6 +74,8 @@ class Pass:
     direction: str
     start_frame: int
     end_frame: int
+    start_line: str = ""    # marker key the walk began at
+    stop_line: str = ""     # marker key the walk ended at
 
 
 # ---------------------------------------------------------------- trajectory
@@ -166,38 +168,50 @@ def _clean(v: np.ndarray) -> np.ndarray:
 
 # -------------------------------------------------------------------- passes
 def find_passes(
-    traj: Trajectory, markers: MarkerSet, directions
+    traj: Trajectory, markers: MarkerSet, spec_directions
 ) -> list[Pass]:
-    """All start-line -> stop-line passes for the given directions, in time order."""
+    """All start-line -> stop-line passes, in time order.
+
+    *spec_directions* are the codes from the file name (they only select the
+    axis); ``markers.mode`` / ``markers.flip`` choose the senses and labels.
+    Each pass carries the direction code of the sense actually walked.
+    """
     passes: list[Pass] = []
-    for d in directions:
-        keys = start_stop_keys(d, markers.flip)
-        if keys is None:
-            continue
-        axis, _ = DIRECTION_RULES[d]
-        passes += _passes_for(d, traj.axis(axis), markers.get(keys[0]),
-                              markers.get(keys[1]))
+    for code, axis, sense in active_directions(
+        spec_directions, markers.mode, markers.flip
+    ):
+        start_key, stop_key = sense_keys(axis, sense)
+        for ps in _passes_for(
+            code, traj.axis(axis), markers.get(start_key), markers.get(stop_key)
+        ):
+            passes.append(
+                Pass(ps.direction, ps.start_frame, ps.end_frame, start_key, stop_key)
+            )
     passes.sort(key=lambda p: p.start_frame)
-    return _apply_roll(passes, traj, markers)
+    return _apply_padding(passes, traj, markers)
 
 
-def _apply_roll(passes: list[Pass], traj: Trajectory, markers: MarkerSet) -> list[Pass]:
-    """Extend each pass by pre/post roll (seconds), never into a neighbour."""
-    pre = int(round(markers.pre_roll * traj.fps))
-    post = int(round(markers.post_roll * traj.fps))
-    if not (pre or post):
+def _apply_padding(
+    passes: list[Pass], traj: Trajectory, markers: MarkerSet
+) -> list[Pass]:
+    """Extend each pass by the padding of the lines it starts/ends at.
+
+    Never runs into a neighbouring pass or outside the video."""
+    if not (markers.pad_lo or markers.pad_hi):
         return passes
     last = len(traj.x) - 1
     out: list[Pass] = []
     for i, ps in enumerate(passes):
+        pad_s = int(round(markers.pad_for(ps.start_line) * traj.fps))
+        pad_e = int(round(markers.pad_for(ps.stop_line) * traj.fps))
         lo = out[-1].end_frame + 1 if out else 0
         hi = passes[i + 1].start_frame - 1 if i + 1 < len(passes) else last
-        # a following pass may itself start earlier by its own pre-roll
-        hi = max(ps.end_frame, hi - pre)
         out.append(Pass(
             ps.direction,
-            max(lo, ps.start_frame - pre),
-            min(hi, ps.end_frame + post),
+            max(lo, ps.start_frame - pad_s),
+            max(ps.end_frame, min(hi, ps.end_frame + pad_e)),
+            ps.start_line,
+            ps.stop_line,
         ))
     return out
 

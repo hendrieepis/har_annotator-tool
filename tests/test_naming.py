@@ -55,24 +55,36 @@ def test_bad_name_raises():
         FilenameSpec.parse("too_short.mp4")
 
 
-def test_single_direction_file_uses_one_direction_and_keeps_suffix():
+def test_one_code_file_alternates_with_the_reverse_direction():
     spec = FilenameSpec.parse("P001_BRJ_KKN_CEPAT.mp4")
-    assert spec.directions == ("KKN",)
+    assert spec.directions == ("KKN", "KNK")
     assert spec.prefix == ["P001", "BRJ"]
     assert spec.suffix == ["CEPAT"]
-    names = [spec.target_for(i).filename for i in (1, 2, 3, 10)]
-    assert names == [
+    assert [spec.target_for(i).filename for i in (1, 2, 3, 4, 20)] == [
         "P001_BRJ_KKN_CEPAT_01.mp4",
+        "P001_BRJ_KNK_CEPAT_01.mp4",
         "P001_BRJ_KKN_CEPAT_02.mp4",
-        "P001_BRJ_KKN_CEPAT_03.mp4",
-        "P001_BRJ_KKN_CEPAT_10.mp4",
+        "P001_BRJ_KNK_CEPAT_02.mp4",
+        "P001_BRJ_KNK_CEPAT_10.mp4",
     ]
-    assert {spec.target_for(i).direction for i in range(1, 8)} == {"KKN"}
 
 
-def test_two_direction_file_unchanged_and_all_codes_single():
+def test_depth_file_alternates_mdk_mjh_like_the_reported_bug():
+    # P002_BRJ_MDK_CEPAT.mp4: the 2nd clip must be MJH, not "CEPAT"
+    spec = FilenameSpec.parse("P002_BRJ_MDK_CEPAT.mp4")
+    assert spec.directions == ("MDK", "MJH")
+    assert spec.target_for(2).filename == "P002_BRJ_MJH_CEPAT_01.mp4"
+    # different videos of one participant never share an output name
+    a = FilenameSpec.parse("P002_BRJ_KKN_CEPAT.mp4").target_for(1).filename
+    b = FilenameSpec.parse("P002_BRJ_KKN_NORMAL.mp4").target_for(1).filename
+    assert a != b
+
+
+def test_two_code_file_unchanged_and_every_code_pairs_with_its_reverse():
     two = FilenameSpec.parse("P001_BRJ_MDK_MJH_PELAN.mp4")
     assert two.directions == ("MDK", "MJH") and two.suffix == ["PELAN"]
-    for code in ("KKN", "KNK", "MDK", "MJH"):
+    pairs = {"KKN": "KNK", "KNK": "KKN", "MDK": "MJH", "MJH": "MDK"}
+    for code, rev in pairs.items():
         one = FilenameSpec.parse(f"P002_BRJ_{code}_NORMAL.mp4")
-        assert one.directions == (code,)
+        assert one.directions == (code, rev)
+        assert one.suffix == ["NORMAL"]

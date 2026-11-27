@@ -31,6 +31,15 @@ DIRECTION_RULES: dict[str, tuple[str, int]] = {
     "MJH": ("y", -1),
 }
 
+# axis -> {physical sense: direction code}. sense +1 = coordinate increases
+# (left -> right, top -> bottom), -1 = decreases.
+AXIS_CODES = {"x": {1: "KKN", -1: "KNK"}, "y": {1: "MDK", -1: "MJH"}}
+
+# Which walking senses auto clip looks for.
+MODE_FORWARD, MODE_REVERSE, MODE_BOTH = "forward", "reverse", "both"
+MODES = (MODE_FORWARD, MODE_REVERSE, MODE_BOTH)
+_MODE_SENSES = {MODE_FORWARD: (1,), MODE_REVERSE: (-1,), MODE_BOTH: (1, -1)}
+
 # axis -> (low marker key, high marker key)
 AXIS_KEYS = {"x": ("x_left", "x_right"), "y": ("y_top", "y_bottom")}
 
@@ -44,11 +53,16 @@ class MarkerSet:
     # Reverse direction: swap which line is START and which is STOP. Needed when
     # a recording's naming (e.g. KNK first) is the mirror of the picture.
     flip: bool = False
-    # Extra seconds kept before the START line / after the STOP line. Operators
-    # often begin a clip a little before the subject starts moving (and the
-    # amount differs per recording), so this is a per-video setting, default 0.
-    pre_roll: float = 0.0
-    post_roll: float = 0.0
+    # Direction mode for auto clip: "forward" (left->right / top->bottom),
+    # "reverse" (right->left / bottom->top) or "both" (default).
+    mode: str = MODE_BOTH
+    # Padding in seconds per line: whenever a walk STARTS or ENDS at that line
+    # the clip is extended outward by this much. Needed at the far end of depth
+    # walks (MDK/MJH), where the subject stands still and the operator starts or
+    # stops a little earlier/later; the amount differs per recording. Default 0.
+    # pad_lo = left / top line, pad_hi = right / bottom line.
+    pad_lo: float = 0.0
+    pad_hi: float = 0.0
 
     def get(self, key: str) -> float:
         return getattr(self, key)
@@ -62,6 +76,10 @@ class MarkerSet:
         else:
             value = max(value, getattr(self, lo_key) + MIN_GAP)
         setattr(self, key, min(max(value, 0.0), 1.0))
+
+    def pad_for(self, key: str) -> float:
+        """Padding (s) for the line *key* (x_left/y_top -> pad_lo, else pad_hi)."""
+        return self.pad_lo if key in ("x_left", "y_top") else self.pad_hi
 
     def axis_bounds(self, axis: str) -> tuple[float, float]:
         lo, hi = AXIS_KEYS[axis]
@@ -81,7 +99,9 @@ class MarkerSet:
                 except (TypeError, ValueError):
                     pass
         m.flip = bool(data.get("flip", False))
-        for key in ("pre_roll", "post_roll"):
+        if data.get("mode") in MODES:
+            m.mode = data["mode"]
+        for key in ("pad_lo", "pad_hi"):
             try:
                 setattr(m, key, min(max(float(data.get(key, 0.0)), 0.0), 30.0))
             except (TypeError, ValueError):
@@ -119,18 +139,60 @@ def start_stop_keys(direction: str, flip: bool = False) -> tuple[str, str] | Non
     return (lo, hi) if forward else (hi, lo)
 
 
-def marker_roles(directions, flip: bool = False) -> dict[str, list[tuple[str, str]]]:
-    """Which lines matter for these directions and what each one means.
+def opposite_direction(code: str) -> str | None:
+    """The reverse walk of *code* (KKN<->KNK, MDK<->MJH), or None if unknown."""
+    rule = DIRECTION_RULES.get(code)
+    if rule is None:
+        return None
+    axis, sense = rule
+    return AXIS_CODES[axis][-sense]
 
-    Returns ``{marker_key: [(direction, "START"|"STOP"), ...]}``; only lines of
-    axes actually used by *directions* are present. Unknown codes are ignored.
+
+def axes_in_use(spec_directions) -> list[str]:
+    """Axes ("x"/"y") implied by the direction codes of the file name."""
+    axes: list[str] = []
+    for d in spec_directions:
+        rule = DIRECTION_RULES.get(d)
+        if rule and rule[0] not in axes:
+            axes.append(rule[0])
+    return axes
+
+
+def active_directions(
+    spec_directions, mode: str = MODE_BOTH, flip: bool = False
+) -> list[tuple[str, str, int]]:
+    """``[(code, axis, sense), ...]`` auto clip should look for.
+
+    The axis comes from the file name (KKN/KNK -> x, MDK/MJH -> y); *mode*
+    picks the walking sense(s). Clips are named by the direction actually
+    walked, so a file called ``..._KKN_...`` yields both KKN and KNK clips in
+    "both" mode. ``flip`` swaps the two codes for mirrored recordings.
+    """
+    out = []
+    for axis in axes_in_use(spec_directions):
+        for sense in _MODE_SENSES.get(mode, _MODE_SENSES[MODE_BOTH]):
+            code = AXIS_CODES[axis][-sense if flip else sense]
+            out.append((code, axis, sense))
+    return out
+
+
+def sense_keys(axis: str, sense: int) -> tuple[str, str]:
+    """(start_key, stop_key) lines for walking *sense* along *axis*."""
+    lo, hi = AXIS_KEYS[axis]
+    return (lo, hi) if sense > 0 else (hi, lo)
+
+
+def marker_roles(
+    spec_directions, mode: str = MODE_BOTH, flip: bool = False
+) -> dict[str, list[tuple[str, str]]]:
+    """Which lines matter and what each one means.
+
+    Returns ``{marker_key: [(direction, "START"|"STOP"), ...]}`` for the active
+    directions only. Unknown file-name codes give an empty result.
     """
     roles: dict[str, list[tuple[str, str]]] = {}
-    for d in directions:
-        keys = start_stop_keys(d, flip)
-        if keys is None:
-            continue
-        start, stop = keys
-        roles.setdefault(start, []).append((d, "START"))
-        roles.setdefault(stop, []).append((d, "STOP"))
+    for code, axis, sense in active_directions(spec_directions, mode, flip):
+        start, stop = sense_keys(axis, sense)
+        roles.setdefault(start, []).append((code, "START"))
+        roles.setdefault(stop, []).append((code, "STOP"))
     return roles

@@ -94,8 +94,14 @@ class AnnotationSession:
         return bool(self.pending)
 
     # ----- mutation ----------------------------------------------------
-    def add_mark(self, start_frame: int, end_frame: int) -> ClipRecord:
+    def add_mark(
+        self, start_frame: int, end_frame: int, direction: str | None = None
+    ) -> ClipRecord:
         """Append a freshly-marked (not yet rendered) clip and persist.
+
+        By default the name follows the alternating direction order of the
+        source file name. With *direction* (auto clip) the clip is named for
+        that direction and numbered within it.
 
         Raises ``ValueError`` unless ``end_frame > start_frame`` (a clip may
         not start and stop at the same time).
@@ -104,7 +110,13 @@ class AnnotationSession:
             raise ValueError(
                 f"end_frame ({end_frame}) must be after start_frame ({start_frame})"
             )
-        target = self.next_target()
+        if direction is None:
+            target = self.next_target()
+        else:
+            same = sum(
+                1 for c in (*self.pending, *self.exported) if c.direction == direction
+            )
+            target = self.spec.name_for(self.next_index, direction, same + 1)
         record = ClipRecord(
             index=target.index,
             direction=target.direction,

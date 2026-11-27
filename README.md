@@ -236,16 +236,18 @@ Pilih mode di bawah video:
   6. **🗑 Clear pending** menghapus klip yang belum di-export. Klik ganda klip di
      daftar pending untuk melompat ke awalnya.
 
-**Opsi tambahan di mode Auto** (semuanya disimpan per video di `<video>.markers.json`
-dan terkunci saat auto clip berjalan):
+**Opsi di mode Auto** (semuanya disimpan per video di `<video>.markers.json` dan
+terkunci saat auto clip berjalan):
 
-| Opsi | Kapan dipakai |
+| Opsi | Fungsi |
 |---|---|
-| **Reverse direction** (kotak centang di baris mode) | Arah jalan di gambar berkebalikan dengan kode arah pada nama file, misalnya video `..._KNK_KKN_...` yang lintasan pertamanya bergerak kiri → kanan di layar. Opsi ini menukar garis START dan STOP; labelnya ikut berubah. |
-| **Pre-roll** (detik) | Klip dimulai lebih awal dari saat subjek melewati garis START. Berguna pada MDK/MJH: operator biasanya mulai merekam klip beberapa saat sebelum subjek mulai berjalan, dan jedanya berbeda per rekaman. |
-| **Post-roll** (detik) | Klip berakhir lebih lambat dari saat subjek melewati garis STOP. |
+| **Direction: Both directions** (bawaan) | Mendeteksi **dua arah sekaligus** dalam satu kali Play. Klip dinamai menurut arah yang benar-benar dijalani, dengan nomor terpisah per arah: `..._KKN_..._01`, `..._KNK_..._01`, … (atau `MDK`/`MJH`). Nama file video cukup memuat satu kode arah (mis. `P001_BRJ_KKN_CEPAT.mp4`); kode itu hanya menentukan sumbu (KKN/KNK = kiri-kanan, MDK/MJH = atas-bawah). |
+| **Direction: Forward direction** | Hanya kiri → kanan (KKN) atau atas → bawah (MDK). |
+| **Direction: Reverse direction** | Hanya kanan → kiri (KNK) atau bawah → atas (MJH). |
+| **Swap KKN↔KNK / MDK↔MJH labels** | Untuk rekaman yang gambarnya kebalikan dari penamaan, mis. subjek berjalan kiri → kanan di layar tetapi jalan itu disebut KNK. Menukar nama dua arah itu. |
+| **Left pad / Right pad** (atau **Top pad / Bottom pad**), detik | Memperpanjang klip ke luar setiap kali lintasan dimulai atau berakhir di garis tersebut. Berguna di **ujung jauh** pada MDK/MJH: subjek berdiri diam sebelum/sesudah berjalan, dan operator memulai/mengakhiri klip sedikit lebih awal/lambat. Padding di garis atas memajukan awal klip MDK **dan** memundurkan akhir klip MJH. Nilai bawaan 0. |
 
-Pre/post-roll tidak pernah menimpa klip di sebelahnya. Nilai bawaan 0.
+Padding tidak pernah menimpa klip di sebelahnya.
 
 Cara kerja deteksi: kamera dianggap diam; latar belakang diestimasi dengan median
 frame, lalu posisi subjek per frame diambil dari piksel yang berbeda dari latar
@@ -255,8 +257,8 @@ dengan arah yang benar; jalan setengah jalan diabaikan. Lintasan yang arahnya
 tidak sesuai urutan nama (mis. `KKN, KNK, KKN, …`) dilewati dan dilaporkan di
 status bar.
 
-> **Selalu periksa hasil auto clip.** Posisi marker, Reverse direction, dan
-> pre-roll yang tepat berbeda-beda per rekaman, jadi atur dulu dengan Preview. Klip langsung di-export, jadi cek file di
+> **Selalu periksa hasil auto clip.** Posisi marker, Swap labels, dan padding yang
+> tepat berbeda-beda per rekaman, jadi atur dulu dengan Preview. Klip langsung di-export, jadi cek file di
 > folder `clips/` setelah selesai. Deteksi gerakan bisa
 > keliru jika ada orang lain yang lewat, bayangan kuat, atau kamera bergeser.
 > Pada uji dengan video contoh, video kiri-kanan menghasilkan 20 lintasan
@@ -311,6 +313,7 @@ tests/
   test_naming.py         # uji kebenaran penamaan/urutan
   test_session.py        # uji pending/exported, persistensi, resume, undo/redo
   test_markers.py        # uji marker: arti start/stop, batas geser, simpan/muat
+  test_direction_modes.py # uji mode forward/reverse/both dan penamaan per arah
   test_autoclip.py       # uji deteksi lintasan (termasuk video sintetis)
 ```
 

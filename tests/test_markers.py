@@ -48,7 +48,10 @@ def test_flip_swaps_start_and_stop_and_persists(tmp_path):
     assert start_stop_keys("KKN", flip=True) == ("x_right", "x_left")
     assert start_stop_keys("KNK", flip=True) == ("x_left", "x_right")
     assert start_stop_keys("MDK", flip=True) == ("y_bottom", "y_top")
-    assert marker_roles(("KKN",), flip=True)["x_right"] == [("KKN", "START")]
+    # forward only + swapped labels: the left -> right walk is called KNK
+    assert marker_roles(("KKN",), "forward", flip=True) == {
+        "x_left": [("KNK", "START")], "x_right": [("KNK", "STOP")],
+    }
     m = MarkerSet(flip=True)
     p = tmp_path / "m.json"
     m.save(p)

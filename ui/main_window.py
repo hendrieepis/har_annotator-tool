@@ -44,7 +44,7 @@ from har_annotator.core.exporter import (
     ffmpeg_available,
 )
 from har_annotator.core.autoclip import Trajectory, find_passes
-from har_annotator.core.markers import MarkerSet, marker_roles
+from har_annotator.core.markers import MODES, MarkerSet, axes_in_use, marker_roles
 from har_annotator.core.naming import FilenameSpec
 from har_annotator.core.session import (
     AnnotationSession,
@@ -81,7 +81,7 @@ class MainWindow(QWidget):
         self._analysis_play = False          # analysis was started by Play
         self._auto_chain = False             # keep exporting until nothing is left
         self._auto_queue: list = []          # detected passes still ahead
-        self._auto_stats = {"added": 0, "dup": 0, "order": 0}
+        self._auto_stats = {"added": 0, "dup": 0}
 
         self._build_ui()
         self._install_shortcuts()
@@ -121,41 +121,58 @@ class MainWindow(QWidget):
         self.chk_show_markers = QCheckBox("Show markers")
         self.chk_show_markers.setChecked(True)
         self.chk_show_markers.toggled.connect(self.player.set_markers_visible)
-        self.chk_flip = QCheckBox("Reverse direction")
+        # Direction to detect. Clips are named for the direction actually walked.
+        self.cmb_direction = QComboBox()
+        for label, mode, tip in (
+            ("Forward direction", "forward",
+             "Only left → right (KKN) or top → bottom (MDK)"),
+            ("Reverse direction", "reverse",
+             "Only right → left (KNK) or bottom → top (MJH)"),
+            ("Both directions", "both",
+             "Detect both ways in one play (KKN + KNK, or MDK + MJH)"),
+        ):
+            self.cmb_direction.addItem(label, mode)
+            self.cmb_direction.setItemData(
+                self.cmb_direction.count() - 1, tip, Qt.ItemDataRole.ToolTipRole
+            )
+        self.cmb_direction.setCurrentIndex(MODES.index("both"))  # default
+        self.cmb_direction.currentIndexChanged.connect(self._on_direction_changed)
+        self.chk_flip = QCheckBox("Swap KKN↔KNK / MDK↔MJH labels")
         self.chk_flip.setToolTip(
-            "Swap START and STOP lines. Use when the walking direction in the "
-            "picture is the mirror of the direction in the file name."
+            "Use when the picture is the mirror of the naming, e.g. the subject "
+            "walks left → right on screen but that walk is called KNK."
         )
         self.chk_flip.toggled.connect(self._on_flip_toggled)
         mode_row.addWidget(QLabel("Mode:"))
         mode_row.addWidget(self.rb_manual)
         mode_row.addWidget(self.rb_auto)
         mode_row.addStretch(1)
-        mode_row.addWidget(self.chk_flip)
         mode_row.addWidget(self.chk_show_markers)
 
         # --- auto controls (hidden in manual mode)
         self.auto_box = QWidget()
-        ab = QHBoxLayout(self.auto_box)
-        ab.setContentsMargins(0, 0, 0, 0)
+        abox = QVBoxLayout(self.auto_box)
+        abox.setContentsMargins(0, 0, 0, 0)
+        dir_row = QHBoxLayout()
+        ab = QHBoxLayout()
+        abox.addLayout(dir_row)
+        abox.addLayout(ab)
         self.btn_preview = QPushButton("👁 Preview (adjust markers)")
         self.btn_preview.setToolTip(
             "Play the video WITHOUT cutting clips so you can drag the markers "
             "into place. Then press Play & auto clip."
         )
         self.btn_preview.clicked.connect(self.toggle_preview)
-        self.spin_pre = QDoubleSpinBox()
-        self.spin_post = QDoubleSpinBox()
-        for spin, tip in (
-            (self.spin_pre, "Seconds kept BEFORE the START line (clip begins earlier)"),
-            (self.spin_post, "Seconds kept AFTER the STOP line (clip ends later)"),
-        ):
+        self.spin_pad_lo = QDoubleSpinBox()
+        self.spin_pad_hi = QDoubleSpinBox()
+        self.lbl_pad_lo = QLabel("Left pad")
+        self.lbl_pad_hi = QLabel("Right pad")
+        for spin in (self.spin_pad_lo, self.spin_pad_hi):
             spin.setRange(0.0, 30.0)
             spin.setSingleStep(0.1)
             spin.setDecimals(2)
             spin.setSuffix(" s")
-            spin.setToolTip(tip)
-            spin.valueChanged.connect(self._on_roll_changed)
+            spin.valueChanged.connect(self._on_pad_changed)
         self.lbl_auto = QLabel("Auto clip is idle.")
         self.lbl_auto.setWordWrap(True)
         self.btn_clear_pending = QPushButton("🗑 Clear pending")
@@ -166,11 +183,15 @@ class MainWindow(QWidget):
         self.auto_bar = QProgressBar()
         self.auto_bar.setRange(0, 100)
         self.auto_bar.setVisible(False)
+        dir_row.addWidget(QLabel("Direction:"))
+        dir_row.addWidget(self.cmb_direction)
+        dir_row.addWidget(self.chk_flip)
+        dir_row.addStretch(1)
+        dir_row.addWidget(self.lbl_pad_lo)
+        dir_row.addWidget(self.spin_pad_lo)
+        dir_row.addWidget(self.lbl_pad_hi)
+        dir_row.addWidget(self.spin_pad_hi)
         ab.addWidget(self.btn_preview, 2)
-        ab.addWidget(QLabel("Pre-roll"))
-        ab.addWidget(self.spin_pre)
-        ab.addWidget(QLabel("Post-roll"))
-        ab.addWidget(self.spin_post)
         ab.addWidget(self.lbl_auto, 3)
         ab.addWidget(self.auto_bar, 1)
         ab.addWidget(self.btn_clear_pending, 1)
@@ -671,7 +692,9 @@ class MainWindow(QWidget):
         """Caption per line, e.g. 'KKN START | KNK STOP' (axes in use only)."""
         if self.session is None:
             return {}
-        roles = marker_roles(self.session.spec.directions, self.markers.flip)
+        roles = marker_roles(
+            self.session.spec.directions, self.markers.mode, self.markers.flip
+        )
         return {
             key: " | ".join(f"{d} {r}" for d, r in items)
             for key, items in roles.items()
@@ -684,13 +707,17 @@ class MainWindow(QWidget):
         self.chk_flip.blockSignals(True)
         self.chk_flip.setChecked(self.markers.flip)
         self.chk_flip.blockSignals(False)
+        self.cmb_direction.blockSignals(True)
+        self.cmb_direction.setCurrentIndex(MODES.index(self.markers.mode))
+        self.cmb_direction.blockSignals(False)
         for spin, val in (
-            (self.spin_pre, self.markers.pre_roll),
-            (self.spin_post, self.markers.post_roll),
+            (self.spin_pad_lo, self.markers.pad_lo),
+            (self.spin_pad_hi, self.markers.pad_hi),
         ):
             spin.blockSignals(True)
             spin.setValue(val)
             spin.blockSignals(False)
+        self._update_pad_labels()
         self._traj = None
         self.player.set_marker_overlay(self.markers, self._marker_labels())
         self.player.set_markers_visible(self.chk_show_markers.isChecked())
@@ -707,13 +734,39 @@ class MainWindow(QWidget):
         self.status.setText("Markers saved for this video.")
         self._update_auto_hint()
 
-    def _on_roll_changed(self, _value: float) -> None:
+    def _on_pad_changed(self, _value: float) -> None:
         if self.session is None or self._auto_active:
             return
-        self.markers.pre_roll = self.spin_pre.value()
-        self.markers.post_roll = self.spin_post.value()
+        self.markers.pad_lo = self.spin_pad_lo.value()
+        self.markers.pad_hi = self.spin_pad_hi.value()
         self.markers.save(self.session.markers_path())
         self._update_auto_hint()
+
+    def _update_pad_labels(self) -> None:
+        """Name the two padding boxes after the lines of the axis in use."""
+        axes = axes_in_use(self.session.spec.directions) if self.session else []
+        lo, hi = ("Top", "Bottom") if axes[:1] == ["y"] else ("Left", "Right")
+        self.lbl_pad_lo.setText(f"{lo} pad")
+        self.lbl_pad_hi.setText(f"{hi} pad")
+        for spin, name in ((self.spin_pad_lo, lo.lower()), (self.spin_pad_hi, hi.lower())):
+            spin.setToolTip(
+                f"Extra seconds kept whenever a walk starts or ends at the {name} "
+                "line (clip is extended outward). Use e.g. at the far end, where "
+                "the subject stands still before/after walking."
+            )
+
+    def _on_direction_changed(self, _index: int) -> None:
+        mode = self.cmb_direction.currentData()
+        if self.session is None or self._auto_active:
+            self.cmb_direction.blockSignals(True)
+            self.cmb_direction.setCurrentIndex(MODES.index(self.markers.mode))
+            self.cmb_direction.blockSignals(False)
+            return
+        self.markers.mode = mode
+        self.markers.save(self.session.markers_path())
+        self.player.set_marker_overlay(self.markers, self._marker_labels())
+        self._update_auto_hint()
+        self.status.setText(f"Auto clip direction: {self.cmb_direction.currentText()}.")
 
     def _on_flip_toggled(self, on: bool) -> None:
         if self.session is None or self._auto_active:
@@ -726,8 +779,7 @@ class MainWindow(QWidget):
         self.player.set_marker_overlay(self.markers, self._marker_labels())
         self._update_auto_hint()
         self.status.setText(
-            "Direction reversed: START and STOP lines swapped." if on
-            else "Direction back to normal."
+            "Labels swapped (KKN↔KNK, MDK↔MJH)." if on else "Labels back to normal."
         )
 
     def _on_mode_toggled(self, auto: bool) -> None:
@@ -860,8 +912,9 @@ class MainWindow(QWidget):
         self.player.set_markers_locked(True)
         self.btn_preview.setEnabled(False)
         self.chk_flip.setEnabled(False)
-        self.spin_pre.setEnabled(False)
-        self.spin_post.setEnabled(False)
+        self.cmb_direction.setEnabled(False)
+        self.spin_pad_lo.setEnabled(False)
+        self.spin_pad_hi.setEnabled(False)
         self.lbl_auto.setText("Running … clips are cut as the subject crosses.")
         self.status.setText(
             f"Auto clip running ({len(self._auto_queue)} pass(es) ahead). "
@@ -882,10 +935,9 @@ class MainWindow(QWidget):
             if any(ps.start_frame <= e and s <= ps.end_frame for s, e in taken):
                 self._auto_stats["dup"] += 1
                 continue
-            if ps.direction != self.session.next_target().direction:
-                self._auto_stats["order"] += 1  # keep KKN,KNK,KKN… naming right
-                continue
-            rec = self.session.add_mark(ps.start_frame, ps.end_frame)
+            rec = self.session.add_mark(
+                ps.start_frame, ps.end_frame, direction=ps.direction
+            )
             self._auto_stats["added"] += 1
             added = True
             self.status.setText(f"Auto clip: {rec.filename} (f{rec.start_frame}–{rec.end_frame})")
@@ -911,18 +963,17 @@ class MainWindow(QWidget):
         self.player.set_markers_locked(False)
         self.btn_preview.setEnabled(True)
         self.chk_flip.setEnabled(True)
-        self.spin_pre.setEnabled(True)
-        self.spin_post.setEnabled(True)
+        self.cmb_direction.setEnabled(True)
+        self.spin_pad_lo.setEnabled(True)
+        self.spin_pad_hi.setEnabled(True)
         st = self._auto_stats
         extra = []
-        if st["order"]:
-            extra.append(f"{st['order']} skipped: direction out of order")
         if st["dup"]:
             extra.append(f"{st['dup']} already marked")
         tail = f" ({'; '.join(extra)})" if extra else ""
         if finished:
             msg = f"Auto clip finished: {st['added']} clip(s) created{tail}."
-            self._auto_stats = {"added": 0, "dup": 0, "order": 0}
+            self._auto_stats = {"added": 0, "dup": 0}
         else:
             msg = (
                 f"Paused: {st['added']} clip(s) so far{tail}. Adjust the markers "

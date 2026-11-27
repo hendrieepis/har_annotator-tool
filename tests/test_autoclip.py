@@ -88,35 +88,50 @@ def test_trajectory_from_synthetic_video(tmp_path):
 def test_flip_picks_the_opposite_walking_sense():
     x = np.concatenate([np.linspace(0.05, 0.95, 60), np.linspace(0.95, 0.05, 60)])
     t = _traj(x)
-    normal = find_passes(t, MarkerSet(), ("KKN",))
-    flipped = find_passes(t, MarkerSet(flip=True), ("KKN",))
+    normal = find_passes(t, MarkerSet(mode="forward"), ("KKN",))
+    flipped = find_passes(t, MarkerSet(mode="forward", flip=True), ("KKN",))
     assert len(normal) == len(flipped) == 1
-    assert normal[0].start_frame < 60 <= flipped[0].start_frame   # 1st vs 2nd leg
+    assert normal[0].direction == "KKN" and flipped[0].direction == "KNK"
+    assert normal[0].start_frame == flipped[0].start_frame   # same physical walk
 
 
-def test_pre_and_post_roll_extend_without_overlapping_neighbours():
+def test_padding_extends_at_the_chosen_line_without_overlapping_neighbours():
     x = np.concatenate([
         np.full(5, np.nan),
-        np.linspace(0.05, 0.95, 60),      # KKN
-        np.linspace(0.95, 0.05, 60),      # KNK right after
+        np.linspace(0.05, 0.95, 60),      # KKN: starts at left, ends at right
+        np.linspace(0.95, 0.05, 60),      # KNK right after: starts right, ends left
     ])
     t = _traj(x)
     base = find_passes(t, MarkerSet(), ("KKN", "KNK"))
-    rolled = find_passes(t, MarkerSet(pre_roll=0.5, post_roll=0.5), ("KKN", "KNK"))
-    assert rolled[0].start_frame == base[0].start_frame - 15      # 0.5 s @ 30 fps
-    assert rolled[0].end_frame > base[0].end_frame
-    assert rolled[0].end_frame < rolled[1].start_frame           # no overlap
-    assert rolled[1].end_frame <= len(x) - 1
-    # no roll configured -> untouched
-    assert find_passes(t, MarkerSet(), ("KKN", "KNK")) == base
+    pad = find_passes(t, MarkerSet(pad_lo=0.5), ("KKN", "KNK"))   # left line only
+    assert pad[0].start_frame == base[0].start_frame - 15         # KKN starts at left
+    assert pad[0].end_frame == base[0].end_frame                  # ...ends at right
+    assert pad[1].end_frame == min(base[1].end_frame + 15, len(x) - 1)  # KNK ends at left
+    assert pad[1].start_frame == base[1].start_frame
+    both = find_passes(t, MarkerSet(pad_lo=0.5, pad_hi=0.5), ("KKN", "KNK"))
+    assert both[0].end_frame < both[1].start_frame                # never overlap
+    assert find_passes(t, MarkerSet(), ("KKN", "KNK")) == base    # default untouched
 
 
-def test_roll_is_clamped_at_video_start_and_persists(tmp_path):
+def test_depth_padding_applies_at_the_far_end_for_both_directions():
+    # far end = top line: MDK starts there, MJH ends there
+    y = np.concatenate([np.linspace(0.3, 0.98, 70), np.linspace(0.98, 0.3, 70)])
+    t = Trajectory(30.0, y * 0, y)
+    m0 = MarkerSet(y_top=0.4, y_bottom=0.9)
+    m1 = MarkerSet(y_top=0.4, y_bottom=0.9, pad_lo=1.0)           # pad_lo = top line
+    a = find_passes(t, m0, ("MDK",))
+    b = find_passes(t, m1, ("MDK",))
+    assert [p.direction for p in b] == ["MDK", "MJH"]
+    assert b[0].start_frame == max(0, a[0].start_frame - 30) and b[0].end_frame == a[0].end_frame
+    assert b[1].start_frame == a[1].start_frame and b[1].end_frame > a[1].end_frame
+
+
+def test_padding_is_clamped_at_video_start_and_persists(tmp_path):
     x = np.linspace(0.05, 0.95, 40)
-    p = find_passes(_traj(x), MarkerSet(pre_roll=30.0), ("KKN",))[0]
+    p = find_passes(_traj(x), MarkerSet(mode="forward", pad_lo=30.0), ("KKN",))[0]
     assert p.start_frame == 0
-    m = MarkerSet(pre_roll=1.25, post_roll=0.4)
+    m = MarkerSet(pad_lo=1.25, pad_hi=0.4)
     f = tmp_path / "m.json"
     m.save(f)
     again = MarkerSet.load(f)
-    assert (again.pre_roll, again.post_roll) == (1.25, 0.4)
+    assert (again.pad_lo, again.pad_hi) == (1.25, 0.4)
