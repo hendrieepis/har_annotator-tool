@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -33,6 +34,14 @@ class ClipRecord:
     start_frame: int
     end_frame: int
     filename: str
+    # Set when this file is a copy of another clip that filled a deleted trial.
+    duplicate_of: str | None = None
+
+
+@dataclass
+class DeleteResult:
+    removed: list["ClipRecord"]
+    filled: list["ClipRecord"]   # duplicates created in place of removed clips
 
 
 def _rel_to(path: Path, base: Path) -> str:
@@ -162,12 +171,16 @@ class AnnotationSession:
         self.save_pending()
         self.save_exported()
 
-    def delete_exported(self, records: list[ClipRecord]) -> list[ClipRecord]:
+    def delete_exported(
+        self, records: list[ClipRecord], fill_gaps: bool = True
+    ) -> DeleteResult:
         """Delete exported clips: remove the files and forget them in the state.
 
         A file that is already gone is not an error (the record is still
-        dropped). Returns the records that were removed. Frames of the source
-        video are never touched, so the clip can simply be marked again.
+        dropped). With *fill_gaps*, a deleted trial that is followed by a later
+        trial of the same direction is replaced by a **copy of the previous
+        trial** (the next one when it was trial 01), so the numbering stays
+        complete (01..N). The source video is never touched.
         """
         gone = {r.index for r in records}
         removed = [e for e in self.exported if e.index in gone]
@@ -177,8 +190,42 @@ class AnnotationSession:
             except OSError as exc:
                 raise OSError(f"Cannot delete {rec.filename}: {exc}") from exc
         self.exported = [e for e in self.exported if e.index not in gone]
+        filled: list[ClipRecord] = []
+        if fill_gaps:
+            for rec in sorted(removed, key=lambda r: (r.direction, r.repetition)):
+                dup = self._fill_gap(rec)
+                if dup is not None:
+                    filled.append(dup)
         self.save_exported()
-        return removed
+        return DeleteResult(removed=removed, filled=filled)
+
+    def _fill_gap(self, rec: ClipRecord) -> ClipRecord | None:
+        if rec.duplicate_of:          # deleting a duplicate again really removes it
+            return None
+        same = [e for e in self.exported if e.direction == rec.direction]
+        if not any(e.repetition > rec.repetition for e in same):
+            return None               # last trial of its direction: nothing to fill
+        lower = [e for e in same if e.repetition < rec.repetition]
+        higher = [e for e in same if e.repetition > rec.repetition]
+        src = max(lower, key=lambda e: e.repetition) if lower else min(
+            higher, key=lambda e: e.repetition
+        )
+        src_file = self.output_dir / src.filename
+        if not src_file.exists():
+            return None
+        shutil.copy2(src_file, self.output_dir / rec.filename)
+        dup = ClipRecord(
+            index=rec.index,
+            direction=rec.direction,
+            repetition=rec.repetition,
+            start_frame=src.start_frame,
+            end_frame=src.end_frame,
+            filename=rec.filename,
+            duplicate_of=src.filename,
+        )
+        self.exported.append(dup)
+        self.exported.sort(key=lambda c: c.index)
+        return dup
 
     # ----- persistence -------------------------------------------------
     def _state_dir(self) -> Path:

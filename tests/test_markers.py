@@ -57,3 +57,18 @@ def test_flip_swaps_start_and_stop_and_persists(tmp_path):
     m.save(p)
     assert MarkerSet.load(p).flip is True
     assert MarkerSet.from_dict({"x_left": 0.2}).flip is False   # old sidecars
+
+
+def test_global_markers_only_share_positions(tmp_path, monkeypatch):
+    from har_annotator.core.markers import load_global_markers, save_global_markers
+
+    monkeypatch.setenv("HAR_ANNOTATOR_CONFIG", str(tmp_path / "cfg"))
+    assert load_global_markers() == MarkerSet()          # nothing saved yet
+    m = MarkerSet(x_left=0.1, x_right=0.9, y_top=0.5, y_bottom=0.8,
+                  flip=True, mode="forward", pad_lo=2.0, pad_hi=3.0)
+    save_global_markers(m)
+    g = load_global_markers()
+    assert (g.x_left, g.x_right, g.y_top, g.y_bottom) == (0.1, 0.9, 0.5, 0.8)
+    assert g.flip is False and g.mode == "both" and g.pad_lo == 0.0
+    (tmp_path / "cfg" / "markers.json").write_text("not json")
+    assert load_global_markers() == MarkerSet()          # corrupt -> defaults

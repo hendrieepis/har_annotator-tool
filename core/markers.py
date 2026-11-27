@@ -17,6 +17,8 @@ the file name (see :data:`DIRECTION_RULES`):
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -134,6 +136,57 @@ class MarkerSet:
             return cls.from_dict(json.loads(path.read_text()))
         except (OSError, json.JSONDecodeError, AttributeError):
             return cls()
+
+
+# ---------------------------------------------------------------- global defaults
+POSITION_KEYS = ("x_left", "x_right", "y_top", "y_bottom")
+
+
+def config_dir() -> Path:
+    """Per-user settings folder (override with ``HAR_ANNOTATOR_CONFIG``)."""
+    override = os.environ.get("HAR_ANNOTATOR_CONFIG")
+    if override:
+        return Path(override)
+    if sys.platform.startswith("win"):
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "har_annotator"
+
+
+def global_markers_path() -> Path:
+    return config_dir() / "markers.json"
+
+
+def load_global_markers() -> MarkerSet:
+    """Marker positions last used on any video, for videos without their own.
+
+    Only the four line positions are shared. Mode, label swap and padding
+    depend on the recording and stay per video.
+    """
+    m = MarkerSet()
+    path = global_markers_path()
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return m
+    if isinstance(data, dict):
+        shared = MarkerSet.from_dict({k: data[k] for k in POSITION_KEYS if k in data})
+        for key in POSITION_KEYS:
+            setattr(m, key, getattr(shared, key))
+    return m
+
+
+def save_global_markers(markers: MarkerSet) -> None:
+    """Remember these line positions for every video opened from now on."""
+    path = global_markers_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({k: markers.get(k) for k in POSITION_KEYS}, indent=2))
+    except OSError:
+        pass  # read-only home etc.: the per-video file still holds the positions
 
 
 def start_stop_keys(direction: str, flip: bool = False) -> tuple[str, str] | None:

@@ -230,6 +230,8 @@ mana *start* dan mana *stop*:
 
 Contoh label pada garis kiri: `KRKN START | KNKR STOP`.
 
+**Posisi marker tersimpan global.** Setiap kali Anda selesai menggeser marker, posisinya disimpan untuk video itu **dan** sebagai default untuk semua video yang dibuka sesudahnya, termasuk di folder lain. Video yang sudah punya marker sendiri tetap memakai miliknya. Yang dibagikan hanya empat posisi garis (`x_left`, `x_right`, `y_top`, `y_bottom`). Mode arah, *Swap labels*, dan padding tetap per video karena berbeda tiap rekaman. File globalnya ada di `~/.config/har_annotator/markers.json` (Linux), `%APPDATA%\har_annotator` (Windows), atau `~/Library/Application Support/har_annotator` (macOS); hapus file itu untuk kembali ke posisi bawaan.
+
 ### Mode: Manual atau Auto clip
 
 Pilih mode di bawah video:
@@ -290,7 +292,8 @@ Klip yang sudah diekspor bisa diperiksa langsung di program, tanpa video player 
 
 - **Putar:** klik dua kali sebuah klip di daftar *Exported clips*, atau pilih lalu tekan **▶ Play clip**. Jendela *Clip player* terbuka dan langsung memutar klip. Ada tombol klip sebelumnya/berikutnya (atau `↑` / `↓`), opsi *Loop*, dan opsi *Play next clip automatically*.
 - **Hapus:** di jendela Clip player tekan **🗑 Delete this clip** (atau `Delete`). Di daftar Exported clips, pilih satu atau beberapa klip lalu tekan **🗑 Delete selected**. Program meminta konfirmasi, lalu menghapus file klip dan mencatatnya dari state. Video sumber tidak disentuh, jadi klip bisa ditandai ulang.
-- Setelah penghapusan, klip baru memakai nama yang belum terpakai, jadi tidak ada nama yang bentrok.
+- **Celah diisi duplikat:** angka `01`–`10` di akhir nama adalah **nomor trial**. Karena tidak ada data video lain untuk trial yang dihapus, secara default (kotak centang *Fill deleted trial with a copy of the previous trial*) klip yang dihapus digantikan **salinan klip trial sebelumnya** dengan arah yang sama, sehingga penomoran tetap lengkap. Jika yang dihapus trial 01, dipakai salinan trial berikutnya. Salinan dicatat di state (`duplicate_of`). Trial terakhir sebuah arah, dan salinan itu sendiri, dihapus sungguhan tanpa pengganti. Matikan kotak centang itu jika Anda ingin penghapusan biasa.
+- Klip baru dari Auto/Manual memakai nama yang belum terpakai, jadi tidak ada nama yang bentrok.
 
 ### Pintasan Keyboard
 

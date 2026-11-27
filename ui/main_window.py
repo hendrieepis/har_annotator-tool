@@ -44,7 +44,14 @@ from har_annotator.core.exporter import (
     ffmpeg_available,
 )
 from har_annotator.core.autoclip import Trajectory, find_passes
-from har_annotator.core.markers import MODES, MarkerSet, axes_in_use, marker_roles
+from har_annotator.core.markers import (
+    MODES,
+    MarkerSet,
+    axes_in_use,
+    load_global_markers,
+    marker_roles,
+    save_global_markers,
+)
 from har_annotator.core.naming import FilenameSpec
 from har_annotator.core.session import (
     AnnotationSession,
@@ -83,6 +90,7 @@ class MainWindow(QWidget):
         self._auto_chain = False             # keep exporting until nothing is left
         self._auto_queue: list = []          # detected passes still ahead
         self._clip_dialog: ClipPlayerDialog | None = None
+        self._last_delete = None
         self._auto_stats = {"added": 0, "dup": 0}
 
         self._build_ui()
@@ -345,12 +353,19 @@ class MainWindow(QWidget):
             "Delete the selected clip files and remove them from the exported list"
         )
         self.btn_delete_clip.clicked.connect(self.delete_selected_clips)
+        self.chk_fill_gaps = QCheckBox("Fill deleted trial with a copy of the previous trial")
+        self.chk_fill_gaps.setChecked(True)
+        self.chk_fill_gaps.setToolTip(
+            "Keeps trial numbers complete (01..N). The last trial of a direction "
+            "and copies themselves are simply deleted."
+        )
         clip_row = QHBoxLayout()
         clip_row.addWidget(self.btn_play_clip)
         clip_row.addWidget(self.btn_delete_clip)
         dv.addWidget(self.lbl_counts)
         dv.addWidget(self.exported_list, 1)
         dv.addLayout(clip_row)
+        dv.addWidget(self.chk_fill_gaps)
         QShortcut(
             QKeySequence(Qt.Key.Key_Delete), self.exported_list,
             activated=self.delete_selected_clips,
@@ -737,7 +752,8 @@ class MainWindow(QWidget):
     def _load_markers(self) -> None:
         assert self.session is not None
         path = self.session.markers_path()
-        self.markers = MarkerSet.load(path) if path.exists() else MarkerSet()
+        # own saved markers win; a new video starts from the last positions used
+        self.markers = MarkerSet.load(path) if path.exists() else load_global_markers()
         self.chk_flip.blockSignals(True)
         self.chk_flip.setChecked(self.markers.flip)
         self.chk_flip.blockSignals(False)
@@ -765,7 +781,10 @@ class MainWindow(QWidget):
         if self.session is None:
             return
         self.markers.save(self.session.markers_path())
-        self.status.setText("Markers saved for this video.")
+        save_global_markers(self.markers)
+        self.status.setText(
+            "Markers saved for this video and as the default for new videos."
+        )
         self._update_auto_hint()
 
     def _on_pad_changed(self, _value: float) -> None:
@@ -1154,8 +1173,17 @@ class MainWindow(QWidget):
         if dlg is not None:
             dlg.release_current()        # free the file before deleting it
         if self._delete_clips([rec], parent=dlg):
-            if dlg is not None:
-                dlg.remove_clip(filename)
+            if dlg is not None:      # reopen on the clip after the deleted one
+                exported = self.session.exported
+                paths = [self.output_dir / c.filename for c in exported]
+                row = next(
+                    (i for i, c in enumerate(exported) if c.index > rec.index),
+                    len(paths) - 1,
+                )
+                if paths:
+                    dlg.open_clips(paths, row)
+                else:
+                    dlg.close()
         elif dlg is not None:
             dlg.reload_current()
 
@@ -1174,27 +1202,39 @@ class MainWindow(QWidget):
             return False
         if self._auto_active:
             return False
+        fill = self.chk_fill_gaps.isChecked()
         names = "\n".join(r.filename for r in records[:8])
         if len(records) > 8:
             names += f"\n… and {len(records) - 8} more"
         answer = QMessageBox.question(
             parent or self, "Delete clips",
             f"Delete {len(records)} clip file(s) from disk?\n\n{names}\n\n"
-            "The source video is not touched; you can mark the clip again.",
+            + (
+                "Each deleted trial that has a later trial is replaced by a COPY "
+                "of the previous trial, so the numbering stays complete.\n\n"
+                if fill else ""
+            )
+            + "The source video is not touched.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return False
         try:
-            removed = self.session.delete_exported(records)
+            result = self.session.delete_exported(records, fill_gaps=fill)
         except OSError as exc:
             QMessageBox.critical(self, "Delete failed", str(exc))
             self._refresh_all()
             return False
         self._refresh_all()
         self._refresh_current_list_item()
-        self.status.setText(f"Deleted {len(removed)} clip(s).")
+        msg = f"Deleted {len(result.removed)} clip(s)"
+        if result.filled:
+            msg += "; filled with duplicates: " + ", ".join(
+                f"{d.filename} ← {d.duplicate_of}" for d in result.filled
+            )
+        self.status.setText(msg + ".")
+        self._last_delete = result
         return True
 
     def _refresh_current_list_item(self) -> None:

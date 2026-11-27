@@ -154,7 +154,7 @@ def test_delete_exported_removes_file_and_state(tmp_path):
         s.mark_exported(r)
         recs.append(r)
 
-    removed = s.delete_exported([recs[1], recs[1]])
+    removed = s.delete_exported([recs[1], recs[1]], fill_gaps=False).removed
     assert [r.index for r in removed] == [recs[1].index]
     assert not (out / recs[1].filename).exists()
     assert (out / recs[0].filename).exists() and (out / recs[2].filename).exists()
@@ -162,7 +162,7 @@ def test_delete_exported_removes_file_and_state(tmp_path):
     assert [e.index for e in reloaded.exported] == [recs[0].index, recs[2].index]
     # already-missing file is fine
     (out / recs[0].filename).unlink()
-    assert len(s.delete_exported([recs[0]])) == 1
+    assert len(s.delete_exported([recs[0]], fill_gaps=False).removed) == 1
 
 
 def test_auto_names_skip_taken_after_delete(tmp_path):
@@ -177,7 +177,55 @@ def test_auto_names_skip_taken_after_delete(tmp_path):
         r = s.add_mark(i * 10, i * 10 + 5, direction="KRKN")
         s.mark_exported(r)
         recs.append(r)
-    s.delete_exported([recs[0]])             # leaves _02 and _03
+    s.delete_exported([recs[0]], fill_gaps=False)  # leaves _02 and _03
     new = s.add_mark(100, 110, direction="KRKN")
     taken = {e.filename for e in s.exported}
     assert new.filename not in taken
+
+
+def test_delete_fills_gap_with_previous_trial(tmp_path):
+    from har_annotator.core.naming import FilenameSpec
+    from har_annotator.core.session import AnnotationSession
+
+    src = tmp_path / "P001_BRJ_KRKN_KNKR_CEPAT.mp4"
+    src.write_bytes(b"x")
+    s = AnnotationSession.load_or_create(src, tmp_path, FilenameSpec.parse(src))
+    recs = []
+    for i in range(4):
+        r = s.add_mark(i * 10, i * 10 + 5, direction="KRKN")
+        (tmp_path / r.filename).write_bytes(f"clip{i}".encode())
+        s.mark_exported(r)
+        recs.append(r)
+
+    res = s.delete_exported([recs[1], recs[2]])      # trials 02 and 03
+    assert [d.repetition for d in res.filled] == [2, 3]
+    assert (tmp_path / recs[1].filename).read_bytes() == b"clip0"
+    assert (tmp_path / recs[2].filename).read_bytes() == b"clip0"   # chained copy
+    assert all(d.duplicate_of for d in res.filled)
+    assert [e.repetition for e in s.exported] == [1, 2, 3, 4]
+    again = AnnotationSession.load_or_create(src, tmp_path, FilenameSpec.parse(src))
+    assert [e.duplicate_of for e in again.exported][1] == recs[0].filename
+
+    # deleting a duplicate, or the last trial, is a real delete
+    res = s.delete_exported([s.exported[1]])
+    assert res.filled == [] and len(s.exported) == 3
+    res = s.delete_exported([s.exported[-1]])
+    assert res.filled == [] and not (tmp_path / recs[3].filename).exists()
+
+
+def test_delete_first_trial_copies_next(tmp_path):
+    from har_annotator.core.naming import FilenameSpec
+    from har_annotator.core.session import AnnotationSession
+
+    src = tmp_path / "P001_BRJ_KRKN_KNKR_CEPAT.mp4"
+    src.write_bytes(b"x")
+    s = AnnotationSession.load_or_create(src, tmp_path, FilenameSpec.parse(src))
+    recs = []
+    for i in range(2):
+        r = s.add_mark(i * 10, i * 10 + 5, direction="KRKN")
+        (tmp_path / r.filename).write_bytes(f"clip{i}".encode())
+        s.mark_exported(r)
+        recs.append(r)
+    res = s.delete_exported([recs[0]])
+    assert (tmp_path / recs[0].filename).read_bytes() == b"clip1"
+    assert res.filled[0].duplicate_of == recs[1].filename
