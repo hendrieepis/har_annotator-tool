@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDoubleSpinBox,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -41,12 +43,15 @@ from har_annotator.core.exporter import (
     ExportRequest,
     ffmpeg_available,
 )
+from har_annotator.core.autoclip import Trajectory, find_passes
+from har_annotator.core.markers import MarkerSet, marker_roles
 from har_annotator.core.naming import FilenameSpec
 from har_annotator.core.session import (
     AnnotationSession,
     ClipRecord,
     counts_per_direction,
 )
+from har_annotator.ui.auto_worker import TrajectoryWorker
 from har_annotator.ui.export_worker import BatchExportWorker
 from har_annotator.ui.player import VideoPlayerWidget
 
@@ -66,6 +71,17 @@ class MainWindow(QWidget):
         self.start_frame: int | None = None
         self.end_frame: int | None = None
         self._worker: BatchExportWorker | None = None
+        self.markers = MarkerSet()           # draggable start/stop lines
+        self.auto_mode = False               # False = manual (Set Start/End)
+        self._traj: Trajectory | None = None
+        self._traj_worker: TrajectoryWorker | None = None
+        self._play_after_analysis = False    # user pressed Play before analysis
+        self._auto_active = False            # a live auto-clip run is in progress
+        self._preview = False                # playing only to adjust the markers
+        self._analysis_play = False          # analysis was started by Play
+        self._auto_chain = False             # keep exporting until nothing is left
+        self._auto_queue: list = []          # detected passes still ahead
+        self._auto_stats = {"added": 0, "dup": 0, "order": 0}
 
         self._build_ui()
         self._install_shortcuts()
@@ -92,17 +108,95 @@ class MainWindow(QWidget):
         self.player = VideoPlayerWidget()
         self.player.frameChanged.connect(self._on_frame_changed)
 
-        mark_row = QHBoxLayout()
+        self.player.markersEdited.connect(self._on_markers_edited)
+        self.player.play_guard = self._play_guard
+        self.player.playbackStopped.connect(self._on_playback_stopped)
+
+        # --- mode: manual (old way) / auto clip from the draggable markers
+        mode_row = QHBoxLayout()
+        self.rb_manual = QRadioButton("Manual (Set Start / Set End)")
+        self.rb_auto = QRadioButton("Auto clip (from markers)")
+        self.rb_manual.setChecked(True)
+        self.rb_auto.toggled.connect(self._on_mode_toggled)
+        self.chk_show_markers = QCheckBox("Show markers")
+        self.chk_show_markers.setChecked(True)
+        self.chk_show_markers.toggled.connect(self.player.set_markers_visible)
+        self.chk_flip = QCheckBox("Reverse direction")
+        self.chk_flip.setToolTip(
+            "Swap START and STOP lines. Use when the walking direction in the "
+            "picture is the mirror of the direction in the file name."
+        )
+        self.chk_flip.toggled.connect(self._on_flip_toggled)
+        mode_row.addWidget(QLabel("Mode:"))
+        mode_row.addWidget(self.rb_manual)
+        mode_row.addWidget(self.rb_auto)
+        mode_row.addStretch(1)
+        mode_row.addWidget(self.chk_flip)
+        mode_row.addWidget(self.chk_show_markers)
+
+        # --- auto controls (hidden in manual mode)
+        self.auto_box = QWidget()
+        ab = QHBoxLayout(self.auto_box)
+        ab.setContentsMargins(0, 0, 0, 0)
+        self.btn_preview = QPushButton("👁 Preview (adjust markers)")
+        self.btn_preview.setToolTip(
+            "Play the video WITHOUT cutting clips so you can drag the markers "
+            "into place. Then press Play & auto clip."
+        )
+        self.btn_preview.clicked.connect(self.toggle_preview)
+        self.spin_pre = QDoubleSpinBox()
+        self.spin_post = QDoubleSpinBox()
+        for spin, tip in (
+            (self.spin_pre, "Seconds kept BEFORE the START line (clip begins earlier)"),
+            (self.spin_post, "Seconds kept AFTER the STOP line (clip ends later)"),
+        ):
+            spin.setRange(0.0, 30.0)
+            spin.setSingleStep(0.1)
+            spin.setDecimals(2)
+            spin.setSuffix(" s")
+            spin.setToolTip(tip)
+            spin.valueChanged.connect(self._on_roll_changed)
+        self.lbl_auto = QLabel("Auto clip is idle.")
+        self.lbl_auto.setWordWrap(True)
+        self.btn_clear_pending = QPushButton("🗑 Clear pending")
+        self.btn_clear_pending.setToolTip(
+            "Remove all pending clips (Redo restores them one by one)"
+        )
+        self.btn_clear_pending.clicked.connect(self.clear_pending)
+        self.auto_bar = QProgressBar()
+        self.auto_bar.setRange(0, 100)
+        self.auto_bar.setVisible(False)
+        ab.addWidget(self.btn_preview, 2)
+        ab.addWidget(QLabel("Pre-roll"))
+        ab.addWidget(self.spin_pre)
+        ab.addWidget(QLabel("Post-roll"))
+        ab.addWidget(self.spin_post)
+        ab.addWidget(self.lbl_auto, 3)
+        ab.addWidget(self.auto_bar, 1)
+        ab.addWidget(self.btn_clear_pending, 1)
+        self.auto_box.setVisible(False)
+
+        self.manual_box = QWidget()
+        mark_row = QHBoxLayout(self.manual_box)
+        mark_row.setContentsMargins(0, 0, 0, 0)
         self.btn_start = QPushButton("⟦ Set Start (I)")
         self.btn_start.clicked.connect(self.mark_start)
         self.btn_end = QPushButton("Set End (O) → add to pending ⟧")
         self.btn_end.clicked.connect(self.mark_end)
         mark_row.addWidget(self.btn_start)
         mark_row.addWidget(self.btn_end)
+        # Step guide: always says which button to press next.
+        self.lbl_step = QLabel()
+        self.lbl_step.setWordWrap(True)
+        self.lbl_step.setAlignment(Qt.AlignmentFlag.AlignCenter)
         center = QWidget()
         cl = QVBoxLayout(center)
         cl.addWidget(self.player, 1)
-        cl.addLayout(mark_row)
+        cl.addLayout(mode_row)
+        cl.addWidget(self.lbl_step)
+        cl.addWidget(self.manual_box)
+        cl.addWidget(self.auto_box)
+        self._update_mark_buttons()
 
         # ---- right
         right = self._build_right_panel()
@@ -160,6 +254,8 @@ class MainWindow(QWidget):
         self.pending_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
+        self.pending_list.setToolTip("Double-click a clip to jump to its start")
+        self.pending_list.itemDoubleClicked.connect(self._seek_to_pending)
         pv.addWidget(self.pending_list, 1)
 
         undo_row = QHBoxLayout()
@@ -294,6 +390,7 @@ class MainWindow(QWidget):
         self.start_frame = None
         self.end_frame = None
         self.player.set_markers(None, None)
+        self._load_markers()
         self.lbl_source.setText(path.name)
         self.lbl_dirs.setText(" → ".join(spec.directions))
         self.lbl_outdir.setText(str(self.output_dir))
@@ -307,19 +404,25 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------ marking
     def _on_frame_changed(self, index: int) -> None:
         self._update_marker_labels()
+        if self._auto_active and self.player.is_playing:
+            self._auto_emit(index)
 
     def mark_start(self) -> None:
-        if self.session is None:
+        if self.session is None or self.auto_mode:
             return
         self.start_frame = self.player.frame_index
         if self.end_frame is not None and self.end_frame < self.start_frame:
             self.end_frame = None
         self.player.set_markers(self.start_frame, self.end_frame)
         self._update_marker_labels()
-        self.status.setText(f"Start frame = {self.start_frame}")
+        self._update_mark_buttons()
+        self.status.setText(
+            f"Start frame = {self.start_frame}. Now move to the end frame and "
+            "press Set End (O)."
+        )
 
     def mark_end(self) -> None:
-        if self.session is None:
+        if self.session is None or self.auto_mode:
             return
         if self.start_frame is None:
             QMessageBox.information(
@@ -327,7 +430,7 @@ class MainWindow(QWidget):
             )
             return
         end = self.player.frame_index
-        if end == self.start_frame:
+        if end == self.start_frame:  # start and end may not coincide
             QMessageBox.information(
                 self,
                 "Invalid end",
@@ -350,7 +453,10 @@ class MainWindow(QWidget):
         self.player.seek(min(end + 1, last))
         self._refresh_all()
         self._refresh_current_list_item()
-        self.status.setText(f"Marked {record.filename}  (pending)")
+        self._update_mark_buttons()
+        self.status.setText(
+            f"Marked {record.filename} (pending). Next: press Set Start (I)."
+        )
         self._maybe_checkpoint()
 
     def undo_last_mark(self) -> None:
@@ -470,9 +576,17 @@ class MainWindow(QWidget):
         self._set_export_running(False)
         self.export_bar.setValue(100)
         self.status.setText("Export complete.")
+        if self._auto_chain:
+            if self.session is not None and self.session.pending:
+                self._start_export(list(self.session.pending))  # clips arrived meanwhile
+            elif not self._auto_active:
+                self._auto_chain = False
+                self.status.setText("Auto clip: all clips exported.")
+                self.lbl_auto.setText("Auto clip done: all clips exported.")
 
     def _on_batch_failed(self, message: str) -> None:
         self._worker = None
+        self._auto_chain = False
         self._set_export_running(False)
         QMessageBox.critical(self, "Export failed", message)
         self.status.setText("Export failed (already-rendered clips were kept).")
@@ -487,8 +601,63 @@ class MainWindow(QWidget):
             w.setEnabled(not running)
         self._update_action_buttons()
 
+    # Highlighted = the button the operator should press next.
+    _ACTIVE_STYLE = (
+        "QPushButton{background:#2e7d32;color:white;font-weight:bold;"
+        "border:2px solid #1b5e20;border-radius:4px;padding:8px;}"
+        "QPushButton:hover{background:#388e3c;}"
+    )
+    _IDLE_STYLE = "QPushButton{padding:8px;}"
+
+    def _update_mark_buttons(self) -> None:
+        """Two-step marking: Start (highlighted) -> End (highlighted).
+
+        * no start yet : only **Set Start** is enabled + highlighted.
+        * start is set : **Set End** becomes the highlighted, enabled button;
+          Start stays available (un-highlighted) to correct the start frame.
+        """
+        if self.session is None:
+            self.btn_start.setEnabled(False)
+            self.btn_end.setEnabled(False)
+            self.btn_start.setStyleSheet(self._IDLE_STYLE)
+            self.btn_end.setStyleSheet(self._IDLE_STYLE)
+            self.lbl_step.setText("Open a folder and pick a video to begin.")
+            return
+        if self.auto_mode:
+            self.lbl_step.setText(
+                "<b>Auto clip</b> — (1) drag the two marker lines to the walking "
+                "boundaries (press <b>Preview</b> to play without cutting clips), "
+                "(2) press <b>Play &amp; auto clip</b>. Each time the subject walks "
+                "from a START line to its STOP line, a clip is cut and exported "
+                "automatically, until the video ends."
+            )
+            return
+        has_start = self.start_frame is not None
+        self.btn_start.setEnabled(True)
+        self.btn_end.setEnabled(has_start)
+        self.btn_start.setStyleSheet(
+            self._IDLE_STYLE if has_start else self._ACTIVE_STYLE
+        )
+        self.btn_end.setStyleSheet(
+            self._ACTIVE_STYLE if has_start else self._IDLE_STYLE
+        )
+        self.btn_start.setText(
+            "⟦ Re-set Start (I)" if has_start else "⟦ Set Start (I)"
+        )
+        if has_start:
+            self.lbl_step.setText(
+                f"<b>Step 2/2</b> — Start = frame {self.start_frame}. "
+                "Move to the last good frame, then press <b>Set End (O)</b>."
+            )
+        else:
+            self.lbl_step.setText(
+                "<b>Step 1/2</b> — Move to the first frame where the whole body "
+                "is visible, then press <b>Set Start (I)</b>."
+            )
+
     def _update_action_buttons(self) -> None:
         """Undo/redo availability depends on session state and export status."""
+        self._update_mark_buttons()
         running = self._worker is not None
         self.btn_undo_mark.setEnabled(
             not running and bool(self.session and self.session.can_undo)
@@ -496,6 +665,298 @@ class MainWindow(QWidget):
         self.btn_redo_mark.setEnabled(
             not running and bool(self.session and self.session.can_redo)
         )
+
+    # ------------------------------------------------- markers & auto clip
+    def _marker_labels(self) -> dict[str, str]:
+        """Caption per line, e.g. 'KKN START | KNK STOP' (axes in use only)."""
+        if self.session is None:
+            return {}
+        roles = marker_roles(self.session.spec.directions, self.markers.flip)
+        return {
+            key: " | ".join(f"{d} {r}" for d, r in items)
+            for key, items in roles.items()
+        }
+
+    def _load_markers(self) -> None:
+        assert self.session is not None
+        path = self.session.markers_path()
+        self.markers = MarkerSet.load(path) if path.exists() else MarkerSet()
+        self.chk_flip.blockSignals(True)
+        self.chk_flip.setChecked(self.markers.flip)
+        self.chk_flip.blockSignals(False)
+        for spin, val in (
+            (self.spin_pre, self.markers.pre_roll),
+            (self.spin_post, self.markers.post_roll),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(val)
+            spin.blockSignals(False)
+        self._traj = None
+        self.player.set_marker_overlay(self.markers, self._marker_labels())
+        self.player.set_markers_visible(self.chk_show_markers.isChecked())
+        if not self._marker_labels():
+            self.status.setText(
+                "Directions not recognised for markers "
+                "(known: KKN, KNK, MDK, MJH) — use Manual mode."
+            )
+
+    def _on_markers_edited(self) -> None:
+        if self.session is None:
+            return
+        self.markers.save(self.session.markers_path())
+        self.status.setText("Markers saved for this video.")
+        self._update_auto_hint()
+
+    def _on_roll_changed(self, _value: float) -> None:
+        if self.session is None or self._auto_active:
+            return
+        self.markers.pre_roll = self.spin_pre.value()
+        self.markers.post_roll = self.spin_post.value()
+        self.markers.save(self.session.markers_path())
+        self._update_auto_hint()
+
+    def _on_flip_toggled(self, on: bool) -> None:
+        if self.session is None or self._auto_active:
+            self.chk_flip.blockSignals(True)
+            self.chk_flip.setChecked(self.markers.flip)
+            self.chk_flip.blockSignals(False)
+            return
+        self.markers.flip = on
+        self.markers.save(self.session.markers_path())
+        self.player.set_marker_overlay(self.markers, self._marker_labels())
+        self._update_auto_hint()
+        self.status.setText(
+            "Direction reversed: START and STOP lines swapped." if on
+            else "Direction back to normal."
+        )
+
+    def _on_mode_toggled(self, auto: bool) -> None:
+        if not auto and self._preview:
+            self.player.stop()
+        self.auto_mode = auto
+        self.manual_box.setVisible(not auto)
+        self.auto_box.setVisible(auto)
+        self.player.set_play_text("▶ Play & auto clip" if auto else "▶ Play")
+        self._update_mark_buttons()
+
+    # -- live auto clip: Play drives detection + export --------------------
+    def _play_guard(self) -> bool:
+        """Called before every Play. In auto mode, make sure the motion analysis
+        exists (run it first if not) and arm the run."""
+        if not self.auto_mode or self.session is None or self._preview:
+            return True
+        if not self._marker_labels():
+            QMessageBox.information(
+                self, "Auto clip unavailable",
+                "Auto clip needs directions KKN/KNK (left-right) or MDK/MJH "
+                "(toward-away) in the file name. Use Manual mode.",
+            )
+            return False
+        if self._traj_worker is not None:
+            return False                      # analysis still running
+        if self._traj is None:
+            self._start_analysis()
+            return False                      # playback starts when it is ready
+        self._begin_auto_run()
+        return True
+
+    def _start_analysis(self, play_after: bool = True) -> None:
+        """Run the motion analysis in the background. With ``play_after`` the UI
+        waits for it and then starts the auto run; otherwise (preview) playback
+        is untouched and only the live pass count is filled in afterwards."""
+        self._analysis_play = play_after
+        worker = TrajectoryWorker(
+            self.session.source, self.session.trajectory_cache_path(), self
+        )
+        worker.progress.connect(self.auto_bar.setValue)
+        worker.done.connect(self._on_traj_ready)
+        worker.failed.connect(self._on_traj_failed)
+        worker.finished.connect(self._on_traj_finished)
+        self._traj_worker = worker
+        self.auto_bar.setValue(0)
+        self.auto_bar.setVisible(True)
+        if play_after:
+            self.player.btn_play.setEnabled(False)
+            self.lbl_auto.setText("Analysing motion … (first time only, then cached)")
+            self.status.setText("Analysing motion before playback …")
+        else:
+            self.lbl_auto.setText("Previewing … (analysing motion in background)")
+        worker.start()
+
+    def _on_traj_ready(self, traj: Trajectory) -> None:
+        self._traj = traj
+        self._play_after_analysis = self._analysis_play  # started by _on_traj_finished
+
+    def _on_traj_failed(self, msg: str) -> None:
+        self._play_after_analysis = False
+        self.lbl_auto.setText(f"Auto clip failed: {msg}")
+        self.status.setText(f"Auto clip failed: {msg}")
+
+    def _on_traj_finished(self) -> None:
+        if self._traj_worker is not None:
+            self._traj_worker.deleteLater()
+        self._traj_worker = None
+        self.auto_bar.setVisible(False)
+        self.player.btn_play.setEnabled(True)
+        if self._play_after_analysis:
+            self._play_after_analysis = False
+            if self.auto_mode and self.session is not None:
+                self.player.play()
+        else:
+            self._update_auto_hint()
+
+    # -- preview: play without cutting, to adjust the markers ---------------
+    def toggle_preview(self) -> None:
+        if self.session is None or self._auto_active:
+            return
+        if self.player.is_playing:
+            self.player.stop()
+            return
+        if not self._marker_labels():
+            self._play_guard()                # shows the "unavailable" message
+            return
+        self._preview = True
+        self.btn_preview.setText("⏸ Stop preview")
+        self.lbl_auto.setText("Previewing — drag the markers; no clips are cut.")
+        if self._traj is None and self._traj_worker is None:
+            self._start_analysis(play_after=False)
+        self.player.play()
+        if not self.player.is_playing:        # play() was vetoed
+            self._end_preview()
+
+    def _end_preview(self) -> None:
+        self._preview = False
+        self.btn_preview.setText("👁 Preview (adjust markers)")
+        self._update_auto_hint()
+
+    def _update_auto_hint(self) -> None:
+        """Idle caption: how many passes the current markers would produce."""
+        if self._auto_active or self._preview or self._traj_worker is not None:
+            return
+        if self._traj is None or self.session is None:
+            self.lbl_auto.setText(
+                "Adjust the markers (Preview to play), then Play & auto clip."
+            )
+            return
+        passes = find_passes(self._traj, self.markers, self.session.spec.directions)
+        if not passes:
+            self.lbl_auto.setText(
+                "No pass between these markers — move the lines onto the walking path."
+            )
+            return
+        counts = {}
+        for ps in passes:
+            counts[ps.direction] = counts.get(ps.direction, 0) + 1
+        detail = " · ".join(f"{d} {n}" for d, n in counts.items())
+        self.lbl_auto.setText(f"With these markers: {detail} pass(es) detected.")
+
+    def _begin_auto_run(self) -> None:
+        """Arm a run from the current frame with the *current* marker positions."""
+        passes = find_passes(self._traj, self.markers, self.session.spec.directions)
+        here = self.player.frame_index
+        self._auto_queue = [p for p in passes if p.start_frame >= here]
+        self._auto_active = True
+        self._auto_chain = True
+        self.player.set_markers_locked(True)
+        self.btn_preview.setEnabled(False)
+        self.chk_flip.setEnabled(False)
+        self.spin_pre.setEnabled(False)
+        self.spin_post.setEnabled(False)
+        self.lbl_auto.setText("Running … clips are cut as the subject crosses.")
+        self.status.setText(
+            f"Auto clip running ({len(self._auto_queue)} pass(es) ahead). "
+            "Pause to adjust the markers."
+        )
+
+    def _auto_emit(self, upto: int) -> None:
+        """Create clips for every detected pass that has finished by *upto*."""
+        if self.session is None:
+            return
+        added = False
+        while self._auto_queue and self._auto_queue[0].end_frame <= upto:
+            ps = self._auto_queue.pop(0)
+            taken = [
+                (c.start_frame, c.end_frame)
+                for c in (*self.session.pending, *self.session.exported)
+            ]
+            if any(ps.start_frame <= e and s <= ps.end_frame for s, e in taken):
+                self._auto_stats["dup"] += 1
+                continue
+            if ps.direction != self.session.next_target().direction:
+                self._auto_stats["order"] += 1  # keep KKN,KNK,KKN… naming right
+                continue
+            rec = self.session.add_mark(ps.start_frame, ps.end_frame)
+            self._auto_stats["added"] += 1
+            added = True
+            self.status.setText(f"Auto clip: {rec.filename} (f{rec.start_frame}–{rec.end_frame})")
+        if added:
+            self._refresh_all()
+            self._refresh_current_list_item()
+            self._auto_export_if_idle()
+
+    def _auto_export_if_idle(self) -> None:
+        if self._worker is None and self.session and self.session.pending:
+            self._start_export(list(self.session.pending))
+
+    def _on_playback_stopped(self, finished: bool) -> None:
+        if self._preview:
+            self._end_preview()
+            return
+        if not self._auto_active:
+            return
+        if finished and self.player.reader is not None:
+            self._auto_emit(self.player.reader.info.frame_count)  # flush the tail
+        self._auto_active = False
+        self._auto_queue = []
+        self.player.set_markers_locked(False)
+        self.btn_preview.setEnabled(True)
+        self.chk_flip.setEnabled(True)
+        self.spin_pre.setEnabled(True)
+        self.spin_post.setEnabled(True)
+        st = self._auto_stats
+        extra = []
+        if st["order"]:
+            extra.append(f"{st['order']} skipped: direction out of order")
+        if st["dup"]:
+            extra.append(f"{st['dup']} already marked")
+        tail = f" ({'; '.join(extra)})" if extra else ""
+        if finished:
+            msg = f"Auto clip finished: {st['added']} clip(s) created{tail}."
+            self._auto_stats = {"added": 0, "dup": 0, "order": 0}
+        else:
+            msg = (
+                f"Paused: {st['added']} clip(s) so far{tail}. Adjust the markers "
+                "if needed, then press Play to continue."
+            )
+        self.lbl_auto.setText(msg)
+        self.status.setText(msg)
+        if finished and self._worker is None:
+            self._auto_chain = False
+        self._auto_export_if_idle()
+
+    def clear_pending(self) -> None:
+        if self.session is None or not self.session.pending:
+            return
+        n = len(self.session.pending)
+        if QMessageBox.question(
+            self, "Clear pending",
+            f"Remove all {n} pending clip(s)? (Redo can restore them.)",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        while self.session.remove_last_mark() is not None:
+            pass
+        self._refresh_all()
+        self._refresh_current_list_item()
+        self.status.setText(f"Cleared {n} pending clip(s).")
+
+    def _seek_to_pending(self, item: QListWidgetItem) -> None:
+        if self.session is None:
+            return
+        idx = item.data(Qt.ItemDataRole.UserRole)
+        for c in self.session.pending:
+            if c.index == idx:
+                self.player.seek(c.start_frame)
+                return
 
     def _maybe_checkpoint(self) -> None:
         if not self.chk_autoexport.isChecked() or self._worker is not None:

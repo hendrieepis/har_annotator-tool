@@ -1,6 +1,7 @@
 """Filename parsing and output-name generation for the HAR annotation tool.
 
-A raw recording packs two walking directions that alternate back and forth, e.g.
+A raw recording packs two walking directions that alternate back and forth (or a
+single direction, see below), e.g.
 
     P001_BRJ_KKN_KNK_NORMAL.mp4   ->  KKN, KNK, KKN, KNK, ...
 
@@ -20,6 +21,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+from .markers import DIRECTION_RULES
+
+# A recording may also hold a SINGLE direction (e.g. P001_BRJ_KKN_CEPAT.mp4):
+# when the token after the first direction is not a known direction code, it is
+# part of the suffix and every clip uses that one direction:
+#
+#     P001_BRJ_KKN_CEPAT.mp4  ->  P001_BRJ_KKN_CEPAT_01.mp4, _02.mp4, ...
 
 
 @dataclass(frozen=True)
@@ -41,11 +50,11 @@ class FilenameSpec:
     """
 
     prefix: list[str]
-    directions: tuple[str, str]
+    directions: tuple[str, ...]   # 1 (single direction) or 2 (alternating)
     suffix: list[str]
     extension: str
     # 0-based positions of the two direction tokens in the original stem.
-    direction_positions: tuple[int, int] = (2, 3)
+    direction_positions: tuple[int, ...] = (2, 3)
 
     DIR1_POS = 2
     DIR2_POS = 3
@@ -57,6 +66,20 @@ class FilenameSpec:
         ext = path.suffix or ".mp4"
         tokens = stem.split("_")
         p1, p2 = cls.DIR1_POS, cls.DIR2_POS
+        known = DIRECTION_RULES
+        if (
+            len(tokens) > p1
+            and tokens[p1] in known
+            and (len(tokens) <= p2 or tokens[p2] not in known)
+        ):
+            # single-direction recording: PREFIX_DIR_SUFFIX
+            return cls(
+                prefix=tokens[:p1],
+                directions=(tokens[p1],),
+                suffix=tokens[p1 + 1:],
+                extension=ext,
+                direction_positions=(p1,),
+            )
         if len(tokens) <= p2:
             raise ValueError(
                 f"Filename '{path.name}' does not match the expected pattern "
@@ -78,8 +101,9 @@ class FilenameSpec:
         """Return the output identity for the *index*-th saved clip (1-based)."""
         if index < 1:
             raise ValueError("clip index is 1-based and must be >= 1")
-        direction = self.directions[(index - 1) % 2]
-        repetition = (index - 1) // 2 + 1
+        n = len(self.directions)
+        direction = self.directions[(index - 1) % n]
+        repetition = (index - 1) // n + 1
         tokens = [*self.prefix, direction, *self.suffix, f"{repetition:02d}"]
         filename = "_".join(tokens) + self.extension
         return ClipTarget(

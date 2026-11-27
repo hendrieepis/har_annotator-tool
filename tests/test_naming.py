@@ -53,3 +53,26 @@ def test_bad_name_raises():
 
     with pytest.raises(ValueError):
         FilenameSpec.parse("too_short.mp4")
+
+
+def test_single_direction_file_uses_one_direction_and_keeps_suffix():
+    spec = FilenameSpec.parse("P001_BRJ_KKN_CEPAT.mp4")
+    assert spec.directions == ("KKN",)
+    assert spec.prefix == ["P001", "BRJ"]
+    assert spec.suffix == ["CEPAT"]
+    names = [spec.target_for(i).filename for i in (1, 2, 3, 10)]
+    assert names == [
+        "P001_BRJ_KKN_CEPAT_01.mp4",
+        "P001_BRJ_KKN_CEPAT_02.mp4",
+        "P001_BRJ_KKN_CEPAT_03.mp4",
+        "P001_BRJ_KKN_CEPAT_10.mp4",
+    ]
+    assert {spec.target_for(i).direction for i in range(1, 8)} == {"KKN"}
+
+
+def test_two_direction_file_unchanged_and_all_codes_single():
+    two = FilenameSpec.parse("P001_BRJ_MDK_MJH_PELAN.mp4")
+    assert two.directions == ("MDK", "MJH") and two.suffix == ["PELAN"]
+    for code in ("KKN", "KNK", "MDK", "MJH"):
+        one = FilenameSpec.parse(f"P002_BRJ_{code}_NORMAL.mp4")
+        assert one.directions == (code,)

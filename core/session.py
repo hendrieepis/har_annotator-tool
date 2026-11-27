@@ -49,7 +49,7 @@ def _rel_to(path: Path, base: Path) -> str:
 
 
 def counts_per_direction(
-    records: list[ClipRecord], directions: tuple[str, str]
+    records: list[ClipRecord], directions: tuple[str, ...]
 ) -> dict[str, int]:
     out: dict[str, int] = {d: 0 for d in directions}
     for c in records:
@@ -148,6 +148,14 @@ class AnnotationSession:
     # ----- persistence -------------------------------------------------
     def _state_dir(self) -> Path:
         return self.output_dir / STATE_DIRNAME
+
+    def markers_path(self) -> Path:
+        """Sidecar with the draggable start/stop marker positions of this video."""
+        return self._state_dir() / f"{self.source.stem}.markers.json"
+
+    def trajectory_cache_path(self) -> Path:
+        """Cache of the motion analysis used by auto clip."""
+        return self._state_dir() / f"{self.source.stem}.traj.npz"
 
     def _exported_path(self) -> Path:
         return self._state_dir() / f"{self.source.stem}.json"

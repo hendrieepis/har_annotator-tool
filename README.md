@@ -191,6 +191,78 @@ operator bisa fokus menandai banyak lintasan dulu, baru di-export belakangan.
 7. Saat aplikasi dibuka lagi dan video yang sama dipilih, daftar pending yang
    belum di-export **dipulihkan otomatis** (resume) — tidak perlu menandai ulang.
 
+### Marker Start/Stop (garis yang bisa digeser)
+
+Di atas video ada **garis marker** berwarna (biru dan oranye) lengkap dengan
+**pegangan** di tengahnya. **Geser garis dengan mouse** (klik-tahan lalu seret;
+kursor berubah saat berada di atas garis). Posisinya disimpan otomatis per video
+di `clips/.har_annotator/<video>.markers.json`, jadi terpulihkan saat dibuka lagi.
+Kotak **Show markers** menyembunyikan/menampilkan garis.
+
+Garis yang tampil mengikuti kode arah pada nama file, dan labelnya menjelaskan
+mana *start* dan mana *stop*:
+
+| Kode | Arti | Garis | START | STOP |
+|---|---|---|---|---|
+| `KKN` | kiri → kanan | 2 garis vertikal | garis **kiri** | garis **kanan** |
+| `KNK` | kanan → kiri | 2 garis vertikal | garis **kanan** | garis **kiri** |
+| `MDK` | mendekat (atas → bawah) | 2 garis horizontal | garis **atas** | garis **bawah** |
+| `MJH` | menjauh (bawah → atas) | 2 garis horizontal | garis **bawah** | garis **atas** |
+
+Contoh label pada garis kiri: `KKN START | KNK STOP`.
+
+### Mode: Manual atau Auto clip
+
+Pilih mode di bawah video:
+
+- **Manual (Set Start / Set End)** — cara lama, lihat langkah 3–4 di atas.
+- **Auto clip (from markers)** — aplikasi memotong klip sendiri saat video diputar:
+  1. Pilih mode **Auto clip (from markers)**. Tombol Play berubah menjadi
+     **▶ Play & auto clip**.
+  2. **Geser marker** kiri dan kanan (atau atas dan bawah) ke batas jalan subjek.
+     Tekan **👁 Preview (adjust markers)** untuk memutar video **tanpa memotong
+     klip**: marker tetap bisa digeser saat video berjalan, dan teks di sebelah
+     tombol menampilkan jumlah lintasan yang akan terdeteksi dengan posisi marker
+     saat ini (mis. `KKN 10 · KNK 10`). Tekan tombol yang sama untuk berhenti.
+  3. Tekan **▶ Play & auto clip** (atau `Space`). Pertama kali aplikasi menganalisis gerakan
+     video lebih dulu (sekitar 10 detik, hasilnya di-cache di `<video>.traj.npz`),
+     lalu video otomatis diputar.
+  4. Setiap kali subjek berjalan dari garis *start* ke garis *stop*, klip
+     langsung dibuat dan **di-export menjadi file** (mis. `..._KKN_..._01.mp4`
+     untuk kiri → kanan, lalu `..._KNK_..._01.mp4` untuk kanan → kiri), dengan
+     penomoran repetisi otomatis. Proses berulang sampai frame terakhir.
+  5. **Pause** kapan saja untuk menggeser marker (saat berjalan, garis dikunci),
+     lalu Play lagi untuk melanjutkan. Klip yang sudah ada tidak digandakan.
+  6. **🗑 Clear pending** menghapus klip yang belum di-export. Klik ganda klip di
+     daftar pending untuk melompat ke awalnya.
+
+**Opsi tambahan di mode Auto** (semuanya disimpan per video di `<video>.markers.json`
+dan terkunci saat auto clip berjalan):
+
+| Opsi | Kapan dipakai |
+|---|---|
+| **Reverse direction** (kotak centang di baris mode) | Arah jalan di gambar berkebalikan dengan kode arah pada nama file, misalnya video `..._KNK_KKN_...` yang lintasan pertamanya bergerak kiri → kanan di layar. Opsi ini menukar garis START dan STOP; labelnya ikut berubah. |
+| **Pre-roll** (detik) | Klip dimulai lebih awal dari saat subjek melewati garis START. Berguna pada MDK/MJH: operator biasanya mulai merekam klip beberapa saat sebelum subjek mulai berjalan, dan jedanya berbeda per rekaman. |
+| **Post-roll** (detik) | Klip berakhir lebih lambat dari saat subjek melewati garis STOP. |
+
+Pre/post-roll tidak pernah menimpa klip di sebelahnya. Nilai bawaan 0.
+
+Cara kerja deteksi: kamera dianggap diam; latar belakang diestimasi dengan median
+frame, lalu posisi subjek per frame diambil dari piksel yang berbeda dari latar
+(titik tengah tubuh untuk kiri-kanan, area kaki untuk mendekat/menjauh).
+Lintasan hanya dihitung jika subjek melewati garis start **dan** garis stop
+dengan arah yang benar; jalan setengah jalan diabaikan. Lintasan yang arahnya
+tidak sesuai urutan nama (mis. `KKN, KNK, KKN, …`) dilewati dan dilaporkan di
+status bar.
+
+> **Selalu periksa hasil auto clip.** Posisi marker, Reverse direction, dan
+> pre-roll yang tepat berbeda-beda per rekaman, jadi atur dulu dengan Preview. Klip langsung di-export, jadi cek file di
+> folder `clips/` setelah selesai. Deteksi gerakan bisa
+> keliru jika ada orang lain yang lewat, bayangan kuat, atau kamera bergeser.
+> Pada uji dengan video contoh, video kiri-kanan menghasilkan 20 lintasan
+> (10 per arah) dan satu video mendekat/menjauh menghasilkan 22 (ada 2 tambahan
+> yang perlu diperiksa).
+
 ### Pintasan Keyboard
 
 | Tombol | Aksi | Tombol | Aksi |
@@ -199,6 +271,8 @@ operator bisa fokus menandai banyak lintasan dulu, baru di-export belakangan.
 | `←` / `→` | Maju/mundur 1 frame | `O` | Set akhir → tambah ke pending |
 | `[` / `]` | Maju/mundur 10 frame | `S` | **Export All** (video aktif) |
 | `Ctrl+Z` | Undo mark | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo mark |
+
+`I` dan `O` hanya berlaku pada mode Manual. Pada mode Auto, `Space` memulai Play & auto clip.
 
 ## Konvensi Penamaan
 
@@ -226,13 +300,18 @@ urutan kemunculan arah pada nama file sumber.
     video.py             # pembaca frame PyAV untuk preview
     exporter.py          # pemotongan klip ffmpeg + preset kualitas
     session.py           # state pending vs exported, auto-persist JSON, resume
+    markers.py           # model garis marker + arti START/STOP per kode arah
+    autoclip.py          # analisis gerakan + pencarian lintasan antar marker
   ui/
     player.py            # widget preview: tampilan, transport, scrubber
     export_worker.py     # BatchExportWorker — QThread ffmpeg (banyak klip)
+    auto_worker.py       # TrajectoryWorker — analisis gerakan di background
     main_window.py       # browser folder, marking, daftar pending, export batch
 tests/
   test_naming.py         # uji kebenaran penamaan/urutan
   test_session.py        # uji pending/exported, persistensi, resume, undo/redo
+  test_markers.py        # uji marker: arti start/stop, batas geser, simpan/muat
+  test_autoclip.py       # uji deteksi lintasan (termasuk video sintetis)
 ```
 
 ### File state per video (di `clips/.har_annotator/`)
