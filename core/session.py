@@ -19,6 +19,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .markers import canonical_direction
 from .naming import FilenameSpec
 
 STATE_DIRNAME = ".har_annotator"
@@ -213,7 +214,10 @@ class AnnotationSession:
             return []
         try:
             data = json.loads(path.read_text())
-            return [ClipRecord(**c) for c in data.get(key, [])]
+            records = [ClipRecord(**c) for c in data.get(key, [])]
+            for r in records:  # old sidecars used KKN/KNK
+                r.direction = canonical_direction(r.direction)
+            return records
         except (json.JSONDecodeError, TypeError, KeyError):
             return []  # corrupt sidecar -> ignore, don't crash the UI
 

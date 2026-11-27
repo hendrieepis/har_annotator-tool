@@ -4,18 +4,18 @@ from har_annotator.core.markers import MIN_GAP, MarkerSet, marker_roles, start_s
 
 
 def test_start_stop_per_direction():
-    assert start_stop_keys("KKN") == ("x_left", "x_right")    # kiri -> kanan
-    assert start_stop_keys("KNK") == ("x_right", "x_left")    # kanan -> kiri
+    assert start_stop_keys("KRKN") == ("x_left", "x_right")    # kiri -> kanan
+    assert start_stop_keys("KNKR") == ("x_right", "x_left")    # kanan -> kiri
     assert start_stop_keys("MDK") == ("y_top", "y_bottom")    # atas -> bawah
     assert start_stop_keys("MJH") == ("y_bottom", "y_top")    # bawah -> atas
     assert start_stop_keys("XXX") is None
 
 
 def test_roles_only_for_used_axis():
-    roles = marker_roles(("KKN", "KNK"))
+    roles = marker_roles(("KRKN", "KNKR"))
     assert set(roles) == {"x_left", "x_right"}
-    assert roles["x_left"] == [("KKN", "START"), ("KNK", "STOP")]
-    assert roles["x_right"] == [("KKN", "STOP"), ("KNK", "START")]
+    assert roles["x_left"] == [("KRKN", "START"), ("KNKR", "STOP")]
+    assert roles["x_right"] == [("KRKN", "STOP"), ("KNKR", "START")]
     assert set(marker_roles(("MDK", "MJH"))) == {"y_top", "y_bottom"}
     assert marker_roles(("AAA", "BBB")) == {}
 
@@ -45,12 +45,12 @@ def test_save_load_roundtrip_and_repair(tmp_path):
 
 
 def test_flip_swaps_start_and_stop_and_persists(tmp_path):
-    assert start_stop_keys("KKN", flip=True) == ("x_right", "x_left")
-    assert start_stop_keys("KNK", flip=True) == ("x_left", "x_right")
+    assert start_stop_keys("KRKN", flip=True) == ("x_right", "x_left")
+    assert start_stop_keys("KNKR", flip=True) == ("x_left", "x_right")
     assert start_stop_keys("MDK", flip=True) == ("y_bottom", "y_top")
-    # forward only + swapped labels: the left -> right walk is called KNK
-    assert marker_roles(("KKN",), "forward", flip=True) == {
-        "x_left": [("KNK", "START")], "x_right": [("KNK", "STOP")],
+    # forward only + swapped labels: the left -> right walk is called KNKR
+    assert marker_roles(("KRKN",), "forward", flip=True) == {
+        "x_left": [("KNKR", "START")], "x_right": [("KNKR", "STOP")],
     }
     m = MarkerSet(flip=True)
     p = tmp_path / "m.json"

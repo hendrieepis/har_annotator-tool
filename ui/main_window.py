@@ -125,11 +125,11 @@ class MainWindow(QWidget):
         self.cmb_direction = QComboBox()
         for label, mode, tip in (
             ("Forward direction", "forward",
-             "Only left → right (KKN) or top → bottom (MDK)"),
+             "Only left → right (KRKN) or top → bottom (MDK)"),
             ("Reverse direction", "reverse",
-             "Only right → left (KNK) or bottom → top (MJH)"),
+             "Only right → left (KNKR) or bottom → top (MJH)"),
             ("Both directions", "both",
-             "Detect both ways in one play (KKN + KNK, or MDK + MJH)"),
+             "Detect both ways in one play (KRKN + KNKR, or MDK + MJH)"),
         ):
             self.cmb_direction.addItem(label, mode)
             self.cmb_direction.setItemData(
@@ -137,10 +137,10 @@ class MainWindow(QWidget):
             )
         self.cmb_direction.setCurrentIndex(MODES.index("both"))  # default
         self.cmb_direction.currentIndexChanged.connect(self._on_direction_changed)
-        self.chk_flip = QCheckBox("Swap KKN↔KNK / MDK↔MJH labels")
+        self.chk_flip = QCheckBox("Swap KRKN↔KNKR / MDK↔MJH labels")
         self.chk_flip.setToolTip(
             "Use when the picture is the mirror of the naming, e.g. the subject "
-            "walks left → right on screen but that walk is called KNK."
+            "walks left → right on screen but that walk is called KNKR."
         )
         self.chk_flip.toggled.connect(self._on_flip_toggled)
         mode_row.addWidget(QLabel("Mode:"))
@@ -689,7 +689,7 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------- markers & auto clip
     def _marker_labels(self) -> dict[str, str]:
-        """Caption per line, e.g. 'KKN START | KNK STOP' (axes in use only)."""
+        """Caption per line, e.g. 'KRKN START | KNKR STOP' (axes in use only)."""
         if self.session is None:
             return {}
         roles = marker_roles(
@@ -724,7 +724,7 @@ class MainWindow(QWidget):
         if not self._marker_labels():
             self.status.setText(
                 "Directions not recognised for markers "
-                "(known: KKN, KNK, MDK, MJH) — use Manual mode."
+                "(known: KRKN, KNKR, MDK, MJH; old KKN/KNK also work) — use Manual mode."
             )
 
     def _on_markers_edited(self) -> None:
@@ -779,7 +779,7 @@ class MainWindow(QWidget):
         self.player.set_marker_overlay(self.markers, self._marker_labels())
         self._update_auto_hint()
         self.status.setText(
-            "Labels swapped (KKN↔KNK, MDK↔MJH)." if on else "Labels back to normal."
+            "Labels swapped (KRKN↔KNKR, MDK↔MJH)." if on else "Labels back to normal."
         )
 
     def _on_mode_toggled(self, auto: bool) -> None:
@@ -800,7 +800,7 @@ class MainWindow(QWidget):
         if not self._marker_labels():
             QMessageBox.information(
                 self, "Auto clip unavailable",
-                "Auto clip needs directions KKN/KNK (left-right) or MDK/MJH "
+                "Auto clip needs directions KRKN/KNKR (left-right) or MDK/MJH "
                 "(toward-away) in the file name. Use Manual mode.",
             )
             return False

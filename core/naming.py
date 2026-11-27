@@ -3,7 +3,9 @@
 A raw recording packs two walking directions that alternate back and forth (or a
 single direction, see below), e.g.
 
-    P001_BRJ_KKN_KNK_NORMAL.mp4   ->  KKN, KNK, KKN, KNK, ...
+    P001_BRJ_KRKN_KNKR_NORMAL.mp4 ->  KRKN, KNKR, KRKN, KNKR, ...
+    (the older spellings KKN / KNK are still accepted in the source name and
+    are written as KRKN / KNKR in the output)
 
 The two direction codes sit at a fixed pair of token positions (default index
 2 and 3). Everything before them is a *prefix* (participant, activity), and
@@ -11,9 +13,9 @@ everything after is a *suffix* (e.g. speed). Output clips replace the two
 direction codes with a single direction plus a 2-digit repetition number, while
 keeping the order in which the directions appear in the source name:
 
-    clip 1 -> P001_BRJ_KKN_NORMAL_01.mp4
-    clip 2 -> P001_BRJ_KNK_NORMAL_01.mp4
-    clip 3 -> P001_BRJ_KKN_NORMAL_02.mp4
+    clip 1 -> P001_BRJ_KRKN_NORMAL_01.mp4
+    clip 2 -> P001_BRJ_KNKR_NORMAL_01.mp4
+    clip 3 -> P001_BRJ_KRKN_NORMAL_02.mp4
     ...
 """
 
@@ -22,16 +24,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .markers import DIRECTION_RULES, opposite_direction
+from .markers import DIRECTION_RULES, canonical_direction, opposite_direction
 
-# A file name may carry only ONE direction code (e.g. P001_BRJ_KKN_CEPAT.mp4).
+# A file name may carry only ONE direction code (e.g. P001_BRJ_KRKN_CEPAT.mp4).
 # The token after it is then part of the suffix, and the recording is still the
 # usual back-and-forth walk: clips alternate between the code and its reverse
-# (KKN<->KNK, MDK<->MJH), starting with the code in the name:
+# (KRKN<->KNKR, MDK<->MJH), starting with the code in the name:
 #
-#     P001_BRJ_KKN_CEPAT.mp4  ->  P001_BRJ_KKN_CEPAT_01.mp4,
-#                                 P001_BRJ_KNK_CEPAT_01.mp4,
-#                                 P001_BRJ_KKN_CEPAT_02.mp4, ...
+#     P001_BRJ_KRKN_CEPAT.mp4 ->  P001_BRJ_KRKN_CEPAT_01.mp4,
+#                                 P001_BRJ_KNKR_CEPAT_01.mp4,
+#                                 P001_BRJ_KRKN_CEPAT_02.mp4, ...
+
+
+_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v"}
+
+
+def _clean_stem(path: Path) -> str:
+    """File stem without stray duplicate video extensions (``x.mp4.mp4``)."""
+    stem = path.stem
+    while Path(stem).suffix.lower() in _VIDEO_EXTS:
+        stem = Path(stem).stem
+    return stem
 
 
 @dataclass(frozen=True)
@@ -39,7 +52,7 @@ class ClipTarget:
     """The identity of one output clip, derived purely from its global index."""
 
     index: int          # 1-based running index across both directions
-    direction: str      # e.g. "KKN"
+    direction: str      # e.g. "KRKN"
     repetition: int     # 1-based repetition number for this direction
     filename: str       # full output file name including extension
 
@@ -65,7 +78,7 @@ class FilenameSpec:
     @classmethod
     def parse(cls, filename: str | Path) -> "FilenameSpec":
         path = Path(filename)
-        stem = path.stem
+        stem = _clean_stem(path)
         ext = path.suffix or ".mp4"
         tokens = stem.split("_")
         p1, p2 = cls.DIR1_POS, cls.DIR2_POS
@@ -77,9 +90,10 @@ class FilenameSpec:
         ):
             # one direction code in the name: PREFIX_DIR_SUFFIX; the second
             # direction is its reverse
+            first = canonical_direction(tokens[p1])
             return cls(
                 prefix=tokens[:p1],
-                directions=(tokens[p1], opposite_direction(tokens[p1])),
+                directions=(first, opposite_direction(first)),
                 suffix=tokens[p1 + 1:],
                 extension=ext,
                 direction_positions=(p1,),
@@ -91,7 +105,7 @@ class FilenameSpec:
                 f"tokens, found {len(tokens)})."
             )
         prefix = tokens[:p1]
-        directions = (tokens[p1], tokens[p2])
+        directions = (canonical_direction(tokens[p1]), canonical_direction(tokens[p2]))
         suffix = tokens[p2 + 1:]
         return cls(
             prefix=prefix,
@@ -120,7 +134,7 @@ class FilenameSpec:
     def name_for(self, index: int, direction: str, repetition: int) -> ClipTarget:
         """Identity of a clip whose direction is chosen explicitly (auto clip).
 
-        Repetitions are counted per direction: KKN_..._01, KNK_..._01, KKN_..._02 …
+        Repetitions are counted per direction: KRKN_..._01, KNKR_..._01, KRKN_..._02 …
         """
         tokens = [*self.prefix, direction, *self.suffix, f"{repetition:02d}"]
         return ClipTarget(

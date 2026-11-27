@@ -5,24 +5,36 @@ Recognition (HAR)** menjadi **klip dataset pendek yang berisi satu lintasan
 saja**.
 
 Setiap video mentah berisi beberapa repetisi dua arah berjalan yang direkam
-bolak-balik (agar subjek tidak cepat lelah), contohnya:
+bolak-balik (agar subjek tidak cepat lelah). Nama file video memuat kode arahnya,
+misalnya:
 
 ```
-P001_BRJ_KKN_KNK_NORMAL.mp4   ->   KKN, KNK, KKN, KNK, …  (10 repetisi tiap arah)
+P001_BRJ_KKN_KNK_NORMAL.mp4   ->   kiri→kanan, kanan→kiri, kiri→kanan, …   (10 repetisi tiap arah)
 ```
 
-Operator **hanya menandai awal dan akhir** setiap lintasan (bagian ketika
-seluruh tubuh subjek terlihat utuh di dalam frame). Seluruh pekerjaan
-administrasi dilakukan otomatis oleh aplikasi: penamaan, penomoran repetisi,
-pergantian arah, progres, dan pemotongan yang mempertahankan kualitas.
+Klip hasilnya dinamai dengan kode arah yang benar-benar dijalani:
+`KRKN` (**K**iri **k**e **ka**nan), `KNKR` (**Ka**nan **k**e **Ki**ri),
+`MDK` (mendekat), dan `MJH` (menjauh).
+
+Ada dua cara membuat klip, dan keduanya menghasilkan nama, penomoran, dan
+kualitas yang sama:
+
+- **Manual** — operator **menandai awal dan akhir** setiap lintasan (bagian ketika
+  seluruh tubuh subjek terlihat utuh di dalam frame).
+- **Auto clip** — operator menggeser dua **garis marker** ke batas jalan subjek,
+  lalu menekan Play; aplikasi memotong klip sendiri tiap subjek melewati garis.
+
+Seluruh pekerjaan administrasi dilakukan otomatis oleh aplikasi: penamaan,
+penomoran repetisi, pergantian arah, progres, dan pemotongan yang mempertahankan
+kualitas.
 
 ```
 P001_BRJ_KKN_KNK_NORMAL.mp4
         │
-        ├─ P001_BRJ_KKN_NORMAL_01.mp4
-        ├─ P001_BRJ_KNK_NORMAL_01.mp4
-        ├─ P001_BRJ_KKN_NORMAL_02.mp4
-        ├─ P001_BRJ_KNK_NORMAL_02.mp4
+        ├─ P001_BRJ_KRKN_NORMAL_01.mp4
+        ├─ P001_BRJ_KNKR_NORMAL_01.mp4
+        ├─ P001_BRJ_KRKN_NORMAL_02.mp4
+        ├─ P001_BRJ_KNKR_NORMAL_02.mp4
         └─ …
 ```
 
@@ -31,6 +43,7 @@ P001_BRJ_KKN_KNK_NORMAL.mp4
 | Kebutuhan | Pilihan | Alasan |
 |---|---|---|
 | GUI | **PySide6 (Qt)** | Widget desktop native yang matang, penanganan keyboard baik |
+| Analisis gerakan | **NumPy** | Selisih frame terhadap latar belakang untuk mencari posisi subjek (auto clip) |
 | Decode preview | **PyAV** | Seek akurat per-frame **tanpa bentrok Qt** (build GUI OpenCV menautkan Qt-nya sendiri sehingga crash bila bersama PySide6) |
 | Pemotongan | **ffmpeg** | Potong akurat per-frame yang mempertahankan resolusi, frame rate, orientasi, dan kualitas (mendekati lossless) |
 
@@ -61,7 +74,7 @@ Kode sumber: **https://github.com/hendrieepis/har_annotator-tool**
 | Git | Untuk mengunduh (clone) dari GitHub |
 | Layar grafis | Aplikasi ini GUI desktop (Linux/macOS/Windows) |
 
-Paket Python (PySide6, PyAV) **diinstal otomatis** oleh `har-annotator` pada
+Paket Python (PySide6, PyAV, NumPy) **diinstal otomatis** oleh `har-annotator` pada
 run pertama ke dalam `.venv/` di folder proyek, jadi tidak perlu
 `pip install` manual dan tidak mengotori Python sistem.
 
@@ -157,16 +170,22 @@ git pull
 
 ## Alur Kerja
 
-Penandaan (**mark**) dan render fisik (**export**) sekarang **terpisah**:
+Langkah 1–2 sama untuk kedua mode. Langkah 3–7 menjelaskan mode **Manual**;
+mode **Auto clip** dijelaskan di bagian *Mode: Manual atau Auto clip* di bawah.
+
+Pada mode Manual, penandaan (**mark**) dan render fisik (**export**) **terpisah**:
 operator bisa fokus menandai banyak lintasan dulu, baru di-export belakangan.
 
 1. **Open Folder** — pilih folder berisi video mentah. Klip ditulis ke subfolder
    `clips/`; progres disimpan di `clips/.har_annotator/`.
 2. Pilih video dari daftar (tanda menunjukkan progres: `✔` ada yang sudah
    di-export, `…` ada yang masih pending, `•` belum ada).
-3. Geser / langkah ke **frame pertama** ketika seluruh tubuh terlihat →
-   **Set Start (I)**.
-4. Langkah ke **frame terakhir** yang masih bagus → **Set End (O)**. Entry baru
+3. *(Manual)* Geser / langkah ke **frame pertama** ketika seluruh tubuh terlihat →
+   **Set Start (I)**. Tombol yang harus ditekan berikutnya selalu **disorot hijau**
+   (Start dulu, lalu End); teks "Step 1/2" dan "Step 2/2" di atas tombol
+   menjelaskan langkahnya.
+4. Langkah ke **frame terakhir** yang masih bagus → **Set End (O)**. Awal dan akhir
+   tidak boleh di frame yang sama. Entry baru
    (nama, arah, nomor repetisi sudah dihitung otomatis) langsung masuk ke
    **daftar klip pending** — **belum** di-render — dan playhead maju tepat
    setelah frame akhir. Daftar pending **otomatis disimpan** ke
@@ -204,12 +223,12 @@ mana *start* dan mana *stop*:
 
 | Kode | Arti | Garis | START | STOP |
 |---|---|---|---|---|
-| `KKN` | kiri → kanan | 2 garis vertikal | garis **kiri** | garis **kanan** |
-| `KNK` | kanan → kiri | 2 garis vertikal | garis **kanan** | garis **kiri** |
+| `KRKN` | kiri → kanan | 2 garis vertikal | garis **kiri** | garis **kanan** |
+| `KNKR` | kanan → kiri | 2 garis vertikal | garis **kanan** | garis **kiri** |
 | `MDK` | mendekat (atas → bawah) | 2 garis horizontal | garis **atas** | garis **bawah** |
 | `MJH` | menjauh (bawah → atas) | 2 garis horizontal | garis **bawah** | garis **atas** |
 
-Contoh label pada garis kiri: `KKN START | KNK STOP`.
+Contoh label pada garis kiri: `KRKN START | KNKR STOP`.
 
 ### Mode: Manual atau Auto clip
 
@@ -223,13 +242,13 @@ Pilih mode di bawah video:
      Tekan **👁 Preview (adjust markers)** untuk memutar video **tanpa memotong
      klip**: marker tetap bisa digeser saat video berjalan, dan teks di sebelah
      tombol menampilkan jumlah lintasan yang akan terdeteksi dengan posisi marker
-     saat ini (mis. `KKN 10 · KNK 10`). Tekan tombol yang sama untuk berhenti.
+     saat ini (mis. `KRKN 10 · KNKR 10`). Tekan tombol yang sama untuk berhenti.
   3. Tekan **▶ Play & auto clip** (atau `Space`). Pertama kali aplikasi menganalisis gerakan
      video lebih dulu (sekitar 10 detik, hasilnya di-cache di `<video>.traj.npz`),
      lalu video otomatis diputar.
   4. Setiap kali subjek berjalan dari garis *start* ke garis *stop*, klip
-     langsung dibuat dan **di-export menjadi file** (mis. `..._KKN_..._01.mp4`
-     untuk kiri → kanan, lalu `..._KNK_..._01.mp4` untuk kanan → kiri), dengan
+     langsung dibuat dan **di-export menjadi file** (mis. `..._KRKN_..._01.mp4`
+     untuk kiri → kanan, lalu `..._KNKR_..._01.mp4` untuk kanan → kiri), dengan
      penomoran repetisi otomatis. Proses berulang sampai frame terakhir.
   5. **Pause** kapan saja untuk menggeser marker (saat berjalan, garis dikunci),
      lalu Play lagi untuk melanjutkan. Klip yang sudah ada tidak digandakan.
@@ -241,10 +260,10 @@ terkunci saat auto clip berjalan):
 
 | Opsi | Fungsi |
 |---|---|
-| **Direction: Both directions** (bawaan) | Mendeteksi **dua arah sekaligus** dalam satu kali Play. Klip dinamai menurut arah yang benar-benar dijalani, dengan nomor terpisah per arah: `..._KKN_..._01`, `..._KNK_..._01`, … (atau `MDK`/`MJH`). Nama file video cukup memuat satu kode arah (mis. `P001_BRJ_KKN_CEPAT.mp4`); kode itu hanya menentukan sumbu (KKN/KNK = kiri-kanan, MDK/MJH = atas-bawah). |
-| **Direction: Forward direction** | Hanya kiri → kanan (KKN) atau atas → bawah (MDK). |
-| **Direction: Reverse direction** | Hanya kanan → kiri (KNK) atau bawah → atas (MJH). |
-| **Swap KKN↔KNK / MDK↔MJH labels** | Untuk rekaman yang gambarnya kebalikan dari penamaan, mis. subjek berjalan kiri → kanan di layar tetapi jalan itu disebut KNK. Menukar nama dua arah itu. |
+| **Direction: Both directions** (bawaan) | Mendeteksi **dua arah sekaligus** dalam satu kali Play. Klip dinamai menurut arah yang benar-benar dijalani, dengan nomor terpisah per arah: `..._KRKN_..._01`, `..._KNKR_..._01`, … (atau `MDK`/`MJH`). Nama file video cukup memuat satu kode arah (mis. `P001_BRJ_KKN_CEPAT.mp4`); kode itu hanya menentukan sumbu (KRKN/KNKR = kiri-kanan, MDK/MJH = atas-bawah). |
+| **Direction: Forward direction** | Hanya kiri → kanan (KRKN) atau atas → bawah (MDK). |
+| **Direction: Reverse direction** | Hanya kanan → kiri (KNKR) atau bawah → atas (MJH). |
+| **Swap KRKN↔KNKR / MDK↔MJH labels** | Untuk rekaman yang gambarnya kebalikan dari penamaan, mis. subjek berjalan kiri → kanan di layar tetapi jalan itu disebut KNKR. Menukar nama dua arah itu. |
 | **Left pad / Right pad** (atau **Top pad / Bottom pad**), detik | Memperpanjang klip ke luar setiap kali lintasan dimulai atau berakhir di garis tersebut. Berguna di **ujung jauh** pada MDK/MJH: subjek berdiri diam sebelum/sesudah berjalan, dan operator memulai/mengakhiri klip sedikit lebih awal/lambat. Padding di garis atas memajukan awal klip MDK **dan** memundurkan akhir klip MJH. Nilai bawaan 0. |
 
 Padding tidak pernah menimpa klip di sebelahnya.
@@ -253,17 +272,17 @@ Cara kerja deteksi: kamera dianggap diam; latar belakang diestimasi dengan media
 frame, lalu posisi subjek per frame diambil dari piksel yang berbeda dari latar
 (titik tengah tubuh untuk kiri-kanan, area kaki untuk mendekat/menjauh).
 Lintasan hanya dihitung jika subjek melewati garis start **dan** garis stop
-dengan arah yang benar; jalan setengah jalan diabaikan. Lintasan yang arahnya
-tidak sesuai urutan nama (mis. `KKN, KNK, KKN, …`) dilewati dan dilaporkan di
-status bar.
+dengan arah yang benar; jalan setengah jalan diabaikan. Klip dinamai menurut arah
+yang benar-benar dijalani, bukan menurut urutan pada nama file video.
 
-> **Selalu periksa hasil auto clip.** Posisi marker, Swap labels, dan padding yang
-> tepat berbeda-beda per rekaman, jadi atur dulu dengan Preview. Klip langsung di-export, jadi cek file di
-> folder `clips/` setelah selesai. Deteksi gerakan bisa
-> keliru jika ada orang lain yang lewat, bayangan kuat, atau kamera bergeser.
-> Pada uji dengan video contoh, video kiri-kanan menghasilkan 20 lintasan
-> (10 per arah) dan satu video mendekat/menjauh menghasilkan 22 (ada 2 tambahan
-> yang perlu diperiksa).
+> **Selalu periksa hasil auto clip.** Klip langsung di-export, jadi cek file di
+> folder `clips/` setelah selesai. Posisi marker, *Swap labels*, dan padding yang
+> tepat berbeda-beda per rekaman, jadi atur dulu dengan **Preview**. Deteksi
+> gerakan bisa keliru jika ada orang lain yang lewat, bayangan kuat, atau kamera
+> bergeser. Pada uji dengan 6 video contoh (3 kiri-kanan, 3 mendekat/menjauh),
+> jumlah dan nama klip sama dengan hasil manual (112 klip), dan sebagian besar
+> panjangnya berbeda kurang dari 10%; selisih terbesar ada di ujung jauh pada
+> MDK/MJH, yang ditangani dengan padding.
 
 ### Pintasan Keyboard
 
@@ -287,8 +306,23 @@ P001 _ BRJ _ KKN _ KNK _ NORMAL
 ```
 
 Token arah diambil dari posisi ke-3 dan ke-4 (`FilenameSpec.DIR1_POS` /
-`DIR2_POS` di `core/naming.py`). Urutan output selalu mengikuti
+`DIR2_POS` di `core/naming.py`). Pada mode Manual, urutan output mengikuti
 urutan kemunculan arah pada nama file sumber.
+
+**Kode arah pada nama klip hasil:**
+
+| Kode | Arti |
+|---|---|
+| `KRKN` | **K**iri **k**e **ka**nan (berjalan dari kiri ke kanan) |
+| `KNKR` | **Ka**nan **k**e **Ki**ri (berjalan dari kanan ke kiri) |
+| `MDK` | Mendekat (atas → bawah) |
+| `MJH` | Menjauh (bawah → atas) |
+
+Nama video lama yang memakai `KKN` / `KNK` tetap diterima dan otomatis ditulis
+sebagai `KRKN` / `KNKR` pada nama klip. Nama video yang hanya memuat **satu**
+kode arah (mis. `P001_BRJ_KKN_CEPAT.mp4`) dianggap rekaman bolak-balik: klip
+bergantian antara kode itu dan kebalikannya (`P001_BRJ_KRKN_CEPAT_01.mp4`,
+`P001_BRJ_KNKR_CEPAT_01.mp4`, …).
 
 ## Struktur Project
 
@@ -312,6 +346,7 @@ urutan kemunculan arah pada nama file sumber.
 tests/
   test_naming.py         # uji kebenaran penamaan/urutan
   test_session.py        # uji pending/exported, persistensi, resume, undo/redo
+  test_legacy_codes.py   # uji ejaan lama KKN/KNK dan kode baru KRKN/KNKR
   test_markers.py        # uji marker: arti start/stop, batas geser, simpan/muat
   test_direction_modes.py # uji mode forward/reverse/both dan penamaan per arah
   test_autoclip.py       # uji deteksi lintasan (termasuk video sintetis)
@@ -324,22 +359,38 @@ tests/
   ditulis ulang tiap mark/undo dan dihapus saat daftar pending kosong. Inilah
   yang dipulihkan saat resume.
 
-Indeks klip (yang menentukan arah + nomor repetisi) bersifat **kontinu** lintas
+File lain per video di folder yang sama:
+
+- `<video>.markers.json` — posisi garis marker dan opsi auto clip (direction,
+  swap labels, padding).
+- `<video>.traj.npz` — cache analisis gerakan (dibuat otomatis; aman dihapus).
+
+Pada mode Manual, indeks klip (yang menentukan arah + nomor repetisi) bersifat **kontinu** lintas
 pending dan exported, sehingga undo lalu menandai ulang tidak menabrak penomoran
-klip yang sudah ter-export.
+klip yang sudah ter-export. Pada auto clip, nomor repetisi dihitung terpisah per
+arah (`KRKN_…_01`, `KNKR_…_01`, `KRKN_…_02`, …).
 
 ## Pengujian
 
 ```bash
+pip install pytest            # sekali saja (di dalam .venv atau Python Anda)
 python3 -m pytest tests/
 ```
+
+Tes tidak memerlukan GUI. Tes auto clip membuat video sintetis kecil lewat PyAV.
 
 ## Pengembangan Lanjutan
 
 - **Skema nama berbeda:** sesuaikan `FilenameSpec.DIR1_POS` / `DIR2_POS`, atau
   berikan `FilenameSpec` yang sudah dikustomisasi ke session.
-- **Lebih dari dua arah / pola lain:** `FilenameSpec.target_for()` adalah satu-
-  satunya tempat yang memetakan indeks klip berjalan ke arah + repetisi.
+- **Lebih dari dua arah / pola lain:** pada mode Manual, `FilenameSpec.target_for()`
+  memetakan indeks klip berjalan ke arah + repetisi; pada auto clip,
+  `FilenameSpec.name_for()` menamai klip menurut arah yang dipilih.
+- **Kode arah baru atau pemetaan lain:** `DIRECTION_RULES`, `AXIS_CODES`, dan
+  `LEGACY_CODES` di `core/markers.py` (arti garis START/STOP, nama keluaran, dan
+  ejaan lama yang masih diterima).
+- **Sensitivitas deteksi gerakan:** konstanta di `core/autoclip.py`
+  (`DIFF_THRESHOLD`, `MIN_AREA_FRAC`, `MIN_PASS_FRAMES`, `SMOOTH`).
 - **Audio / codec berbeda:** `ExportRequest` dan `QUALITY_PRESETS` di
   `exporter.py`.
 - **State pending/exported & persistensi:** `AnnotationSession` di `session.py`

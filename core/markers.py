@@ -8,8 +8,8 @@ Markers are two guide lines per axis, stored as fractions (0..1) of the frame:
 Which line is *start* and which is *stop* depends on the walking direction in
 the file name (see :data:`DIRECTION_RULES`):
 
-    KKN  kiri -> kanan   start = left line,   stop = right line
-    KNK  kanan -> kiri   start = right line,  stop = left line
+    KRKN  kiri -> kanan  start = left line,   stop = right line
+    KNKR  kanan -> kiri  start = right line,  stop = left line
     MDK  mendekat        start = top line,    stop = bottom line
     MJH  menjauh         start = bottom line, stop = top line
 """
@@ -25,15 +25,25 @@ MIN_GAP = 0.04  # lines may not get closer than 4% of the frame
 # direction code -> (axis, sign). sign +1 = coordinate increases (left->right,
 # top->bottom); -1 = decreases.
 DIRECTION_RULES: dict[str, tuple[str, int]] = {
-    "KKN": ("x", +1),
-    "KNK": ("x", -1),
+    "KRKN": ("x", +1),   # Kiri Ke KaNan
+    "KNKR": ("x", -1),   # KaNan Ke KiRi
+    "KKN": ("x", +1),    # legacy spelling of KRKN, still accepted in file names
+    "KNK": ("x", -1),    # legacy spelling of KNKR, still accepted in file names
     "MDK": ("y", +1),
     "MJH": ("y", -1),
 }
 
 # axis -> {physical sense: direction code}. sense +1 = coordinate increases
 # (left -> right, top -> bottom), -1 = decreases.
-AXIS_CODES = {"x": {1: "KKN", -1: "KNK"}, "y": {1: "MDK", -1: "MJH"}}
+AXIS_CODES = {"x": {1: "KRKN", -1: "KNKR"}, "y": {1: "MDK", -1: "MJH"}}
+
+# Old spellings -> the names now used in output clip names.
+LEGACY_CODES = {"KKN": "KRKN", "KNK": "KNKR"}
+
+
+def canonical_direction(code: str) -> str:
+    """Current spelling of a direction code (KKN -> KRKN, KNK -> KNKR)."""
+    return LEGACY_CODES.get(code, code)
 
 # Which walking senses auto clip looks for.
 MODE_FORWARD, MODE_REVERSE, MODE_BOTH = "forward", "reverse", "both"
@@ -140,7 +150,7 @@ def start_stop_keys(direction: str, flip: bool = False) -> tuple[str, str] | Non
 
 
 def opposite_direction(code: str) -> str | None:
-    """The reverse walk of *code* (KKN<->KNK, MDK<->MJH), or None if unknown."""
+    """The reverse walk of *code* (KRKN<->KNKR, MDK<->MJH), or None if unknown."""
     rule = DIRECTION_RULES.get(code)
     if rule is None:
         return None
@@ -163,9 +173,9 @@ def active_directions(
 ) -> list[tuple[str, str, int]]:
     """``[(code, axis, sense), ...]`` auto clip should look for.
 
-    The axis comes from the file name (KKN/KNK -> x, MDK/MJH -> y); *mode*
+    The axis comes from the file name (KRKN/KNKR -> x, MDK/MJH -> y); *mode*
     picks the walking sense(s). Clips are named by the direction actually
-    walked, so a file called ``..._KKN_...`` yields both KKN and KNK clips in
+    walked, so a file called ``..._KRKN_...`` yields both KRKN and KNKR clips in
     "both" mode. ``flip`` swaps the two codes for mirrored recordings.
     """
     out = []
