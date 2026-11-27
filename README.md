@@ -230,6 +230,8 @@ mana *start* dan mana *stop*:
 
 Contoh label pada garis kiri: `KRKN START | KNKR STOP`.
 
+**Posisi marker ditampilkan** di panel *Marker positions* (kanan atas): `x_left`, `x_right`, `y_top`, `y_bottom` dalam persen tinggi/lebar frame beserta pikselnya, dan angkanya berubah langsung saat garis digeser. Garis dari sumbu yang tidak dipakai video itu tampil abu-abu. Tombol **↺ Reset markers** (mode Auto) mengembalikan posisi bawaan.
+
 **Posisi marker tersimpan global.** Setiap kali Anda selesai menggeser marker, posisinya disimpan untuk video itu **dan** sebagai default untuk semua video yang dibuka sesudahnya, termasuk di folder lain. Video yang sudah punya marker sendiri tetap memakai miliknya. Yang dibagikan hanya empat posisi garis (`x_left`, `x_right`, `y_top`, `y_bottom`). Mode arah, *Swap labels*, dan padding tetap per video karena berbeda tiap rekaman. File globalnya ada di `~/.config/har_annotator/markers.json` (Linux), `%APPDATA%\har_annotator` (Windows), atau `~/Library/Application Support/har_annotator` (macOS); hapus file itu untuk kembali ke posisi bawaan.
 
 ### Mode: Manual atau Auto clip
@@ -238,16 +240,18 @@ Pilih mode di bawah video:
 
 - **Manual (Set Start / Set End)** — cara lama, lihat langkah 3–4 di atas.
 - **Auto clip (from markers)** — aplikasi memotong klip sendiri saat video diputar:
-  1. Pilih mode **Auto clip (from markers)**. Tombol Play berubah menjadi
-     **▶ Play & auto clip**.
+  1. Pilih mode **Auto clip (from markers)**. Tombol **▶ Play** tetap sama dan
+     di tempat yang sama seperti pada mode Manual; di sebelahnya muncul tombol hijau
+     **▶ Start Clip**.
   2. **Geser marker** kiri dan kanan (atau atas dan bawah) ke batas jalan subjek.
-     Tekan **👁 Preview (adjust markers)** untuk memutar video **tanpa memotong
-     klip**: marker tetap bisa digeser saat video berjalan, dan teks di sebelah
-     tombol menampilkan jumlah lintasan yang akan terdeteksi dengan posisi marker
-     saat ini (mis. `KRKN 10 · KNKR 10`). Tekan tombol yang sama untuk berhenti.
-  3. Tekan **▶ Play & auto clip** (atau `Space`). Pertama kali aplikasi menganalisis gerakan
-     video lebih dulu (sekitar 10 detik, hasilnya di-cache di `<video>.traj.npz`),
-     lalu video otomatis diputar.
+     Tekan **▶ Play** biasa untuk memutar video **tanpa memotong klip**: marker
+     tetap bisa digeser saat video berjalan, dan teks di sebelah tombol Start Clip
+     menampilkan jumlah lintasan yang akan terdeteksi dengan posisi marker saat ini
+     (mis. `KRKN 10 · KNKR 10`).
+  3. Tekan **▶ Start Clip**. Pertama kali aplikasi menganalisis gerakan video lebih
+     dulu (sekitar 10 detik, hasilnya di-cache di `<video>.traj.npz`), lalu video
+     otomatis diputar dari frame saat ini dan klip mulai dipotong. Tombolnya berubah
+     menjadi **⏸ Pause clip**; setelah dijeda, tekan **▶ Start Clip** untuk melanjutkan.
   4. Setiap kali subjek berjalan dari garis *start* ke garis *stop*, klip
      langsung dibuat dan **di-export menjadi file** (mis. `..._KRKN_..._01.mp4`
      untuk kiri → kanan, lalu `..._KNKR_..._01.mp4` untuk kanan → kiri), dengan
@@ -279,7 +283,7 @@ yang benar-benar dijalani, bukan menurut urutan pada nama file video.
 
 > **Selalu periksa hasil auto clip.** Klip langsung di-export, jadi cek file di
 > folder `clips/` setelah selesai. Posisi marker, *Swap labels*, dan padding yang
-> tepat berbeda-beda per rekaman, jadi atur dulu dengan **Preview**. Deteksi
+> tepat berbeda-beda per rekaman, jadi periksa dulu dengan **Play**. Deteksi
 > gerakan bisa keliru jika ada orang lain yang lewat, bayangan kuat, atau kamera
 > bergeser. Pada uji dengan 6 video contoh (3 kiri-kanan, 3 mendekat/menjauh),
 > jumlah dan nama klip sama dengan hasil manual (112 klip), dan sebagian besar
@@ -304,7 +308,7 @@ Klip yang sudah diekspor bisa diperiksa langsung di program, tanpa video player 
 | `[` / `]` | Maju/mundur 10 frame | `S` | **Export All** (video aktif) |
 | `Ctrl+Z` | Undo mark | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo mark |
 
-`I` dan `O` hanya berlaku pada mode Manual. Pada mode Auto, `Space` memulai Play & auto clip.
+`I` dan `O` hanya berlaku pada mode Manual. `Space` selalu Play/pause biasa (pada mode Auto itu hanya memutar tanpa memotong); untuk memotong tekan **Start Clip**.
 
 ## Konvensi Penamaan
 

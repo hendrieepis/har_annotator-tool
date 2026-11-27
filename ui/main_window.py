@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -85,7 +86,8 @@ class MainWindow(QWidget):
         self._traj_worker: TrajectoryWorker | None = None
         self._play_after_analysis = False    # user pressed Play before analysis
         self._auto_active = False            # a live auto-clip run is in progress
-        self._preview = False                # playing only to adjust the markers
+        self._preview = False                # plain Play in auto mode: adjust markers, no cutting
+        self._clip_request = False           # Start Clip pressed (vs. plain Play)
         self._analysis_play = False          # analysis was started by Play
         self._auto_chain = False             # keep exporting until nothing is left
         self._auto_queue: list = []          # detected passes still ahead
@@ -119,6 +121,7 @@ class MainWindow(QWidget):
         self.player.frameChanged.connect(self._on_frame_changed)
 
         self.player.markersEdited.connect(self._on_markers_edited)
+        self.player.markersMoving.connect(self._refresh_marker_info)
         self.player.play_guard = self._play_guard
         self.player.playbackStopped.connect(self._on_playback_stopped)
 
@@ -167,12 +170,15 @@ class MainWindow(QWidget):
         ab = QHBoxLayout()
         abox.addLayout(dir_row)
         abox.addLayout(ab)
-        self.btn_preview = QPushButton("👁 Preview (adjust markers)")
-        self.btn_preview.setToolTip(
-            "Play the video WITHOUT cutting clips so you can drag the markers "
-            "into place. Then press Play & auto clip."
+        # Plain "Play" (same button, same place as in Manual mode) previews the
+        # video without cutting, to adjust the markers. "Start Clip" cuts.
+        self.btn_start_clip = QPushButton(self._START_TEXT)
+        self.btn_start_clip.setStyleSheet(self._ACTIVE_STYLE)
+        self.btn_start_clip.setToolTip(
+            "Cut and export clips live from the current frame to the end of the "
+            "video. Use Play first to check the markers (Play does not cut)."
         )
-        self.btn_preview.clicked.connect(self.toggle_preview)
+        self.btn_start_clip.clicked.connect(self.start_clip)
         self.spin_pad_lo = QDoubleSpinBox()
         self.spin_pad_hi = QDoubleSpinBox()
         self.lbl_pad_lo = QLabel("Left pad")
@@ -185,6 +191,9 @@ class MainWindow(QWidget):
             spin.valueChanged.connect(self._on_pad_changed)
         self.lbl_auto = QLabel("Auto clip is idle.")
         self.lbl_auto.setWordWrap(True)
+        self.btn_reset_markers = QPushButton("↺ Reset markers")
+        self.btn_reset_markers.setToolTip("Put the marker lines back to their default positions")
+        self.btn_reset_markers.clicked.connect(self.reset_markers)
         self.btn_clear_pending = QPushButton("🗑 Clear pending")
         self.btn_clear_pending.setToolTip(
             "Remove all pending clips (Redo restores them one by one)"
@@ -201,9 +210,10 @@ class MainWindow(QWidget):
         dir_row.addWidget(self.spin_pad_lo)
         dir_row.addWidget(self.lbl_pad_hi)
         dir_row.addWidget(self.spin_pad_hi)
-        ab.addWidget(self.btn_preview, 2)
+        ab.addWidget(self.btn_start_clip, 2)
         ab.addWidget(self.lbl_auto, 3)
         ab.addWidget(self.auto_bar, 1)
+        ab.addWidget(self.btn_reset_markers, 1)
         ab.addWidget(self.btn_clear_pending, 1)
         self.auto_box.setVisible(False)
 
@@ -263,6 +273,22 @@ class MainWindow(QWidget):
         info_form.addRow("Directions:", self.lbl_dirs)
         info_form.addRow("Output:", self.lbl_outdir)
         rl.addWidget(info_box)
+
+        # marker line positions (live while dragging)
+        pos_box = QGroupBox("Marker positions")
+        pos_grid = QGridLayout(pos_box)
+        self.marker_info: dict[str, QLabel] = {}
+        for i, key in enumerate(("x_left", "x_right", "y_top", "y_bottom")):
+            name = QLabel(f"{key}:")
+            val = QLabel("—")
+            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self.marker_info[key] = val
+            col = 0 if i < 2 else 2
+            pos_grid.addWidget(name, i % 2, col)
+            pos_grid.addWidget(val, i % 2, col + 1)
+        pos_grid.setColumnStretch(1, 1)
+        pos_grid.setColumnStretch(3, 1)
+        rl.addWidget(pos_box)
 
         # current mark in progress
         mark_box = QGroupBox("Current mark")
@@ -665,6 +691,9 @@ class MainWindow(QWidget):
             w.setEnabled(not running)
         self._update_action_buttons()
 
+    _START_TEXT = "▶ Start Clip"
+    _PAUSE_TEXT = "⏸ Pause clip"
+
     # Highlighted = the button the operator should press next.
     _ACTIVE_STYLE = (
         "QPushButton{background:#2e7d32;color:white;font-weight:bold;"
@@ -689,11 +718,11 @@ class MainWindow(QWidget):
             return
         if self.auto_mode:
             self.lbl_step.setText(
-                "<b>Auto clip</b> — (1) drag the two marker lines to the walking "
-                "boundaries (press <b>Preview</b> to play without cutting clips), "
-                "(2) press <b>Play &amp; auto clip</b>. Each time the subject walks "
-                "from a START line to its STOP line, a clip is cut and exported "
-                "automatically, until the video ends."
+                "<b>Auto clip</b> — (1) drag the marker lines to the walking "
+                "boundaries; the normal <b>Play</b> button plays without cutting "
+                "clips so you can check them, (2) press <b>Start Clip</b>. Each "
+                "time the subject walks from a START line to its STOP line, a "
+                "clip is cut and exported automatically, until the video ends."
             )
             return
         has_start = self.start_frame is not None
@@ -770,6 +799,7 @@ class MainWindow(QWidget):
         self._update_pad_labels()
         self._traj = None
         self.player.set_marker_overlay(self.markers, self._marker_labels())
+        self._refresh_marker_info()
         self.player.set_markers_visible(self.chk_show_markers.isChecked())
         if not self._marker_labels():
             self.status.setText(
@@ -841,15 +871,17 @@ class MainWindow(QWidget):
         self.auto_mode = auto
         self.manual_box.setVisible(not auto)
         self.auto_box.setVisible(auto)
-        self.player.set_play_text("▶ Play & auto clip" if auto else "▶ Play")
         self._update_mark_buttons()
 
     # -- live auto clip: Play drives detection + export --------------------
     def _play_guard(self) -> bool:
         """Called before every Play. In auto mode, make sure the motion analysis
         exists (run it first if not) and arm the run."""
-        if not self.auto_mode or self.session is None or self._preview:
+        if not self.auto_mode or self.session is None:
             return True
+        clip, self._clip_request = self._clip_request, False
+        if not clip:
+            return self._begin_preview()      # plain Play = preview, never cuts
         if not self._marker_labels():
             QMessageBox.information(
                 self, "Auto clip unavailable",
@@ -862,8 +894,7 @@ class MainWindow(QWidget):
         if self._traj is None:
             self._start_analysis()
             return False                      # playback starts when it is ready
-        self._begin_auto_run()
-        return True
+        return self._begin_auto_run()
 
     def _start_analysis(self, play_after: bool = True) -> None:
         """Run the motion analysis in the background. With ``play_after`` the UI
@@ -906,32 +937,43 @@ class MainWindow(QWidget):
         if self._play_after_analysis:
             self._play_after_analysis = False
             if self.auto_mode and self.session is not None:
+                self._clip_request = True
                 self.player.play()
+                self._clip_request = False
         else:
             self._update_auto_hint()
 
     # -- preview: play without cutting, to adjust the markers ---------------
-    def toggle_preview(self) -> None:
-        if self.session is None or self._auto_active:
+    def start_clip(self) -> None:
+        """Start Clip button: begin cutting, or pause a run that is going."""
+        if self.session is None:
             return
-        if self.player.is_playing:
+        if self._auto_active:
+            self.player.stop()                # pause; Start Clip continues
+            return
+        if self.player.is_playing:            # a preview is running: end it first
             self.player.stop()
-            return
+        self._clip_request = True
+        self.player.play()
+        self._clip_request = False
+
+    def _begin_preview(self) -> bool:
+        """Plain Play in auto mode: play for adjusting markers (no cutting)."""
         if not self._marker_labels():
-            self._play_guard()                # shows the "unavailable" message
-            return
+            QMessageBox.information(
+                self, "Auto clip unavailable",
+                "Auto clip needs directions KRKN/KNKR (left-right) or MDK/MJH "
+                "(toward-away) in the file name. Use Manual mode.",
+            )
+            return False
         self._preview = True
-        self.btn_preview.setText("⏸ Stop preview")
-        self.lbl_auto.setText("Previewing — drag the markers; no clips are cut.")
+        self.lbl_auto.setText("Playing — drag the markers; no clips are cut.")
         if self._traj is None and self._traj_worker is None:
             self._start_analysis(play_after=False)
-        self.player.play()
-        if not self.player.is_playing:        # play() was vetoed
-            self._end_preview()
+        return True
 
     def _end_preview(self) -> None:
         self._preview = False
-        self.btn_preview.setText("👁 Preview (adjust markers)")
         self._update_auto_hint()
 
     def _update_auto_hint(self) -> None:
@@ -940,14 +982,12 @@ class MainWindow(QWidget):
             return
         if self._traj is None or self.session is None:
             self.lbl_auto.setText(
-                "Adjust the markers (Preview to play), then Play & auto clip."
+                "Adjust the markers (Play to check them), then press Start Clip."
             )
             return
         passes = find_passes(self._traj, self.markers, self.session.spec.directions)
         if not passes:
-            self.lbl_auto.setText(
-                "No pass between these markers — move the lines onto the walking path."
-            )
+            self.lbl_auto.setText(self._no_pass_reason())
             return
         counts = {}
         for ps in passes:
@@ -955,15 +995,85 @@ class MainWindow(QWidget):
         detail = " · ".join(f"{d} {n}" for d, n in counts.items())
         self.lbl_auto.setText(f"With these markers: {detail} pass(es) detected.")
 
-    def _begin_auto_run(self) -> None:
+    def _no_pass_reason(self) -> str:
+        """Explain why the markers catch nothing (usually: a line lies outside
+        the area where the subject was actually tracked)."""
+        import numpy as np
+
+        base = "No pass between these markers. "
+        if self._traj is None or self.session is None:
+            return base + "Move the lines onto the walking path."
+        for axis in axes_in_use(self.session.spec.directions):
+            vals = self._traj.axis(axis)
+            vals = vals[~np.isnan(vals)]
+            if vals.size == 0:
+                return base + "No moving subject was detected in this video."
+            lo_key, hi_key = ("x_left", "x_right") if axis == "x" else ("y_top", "y_bottom")
+            lo_name, hi_name = ("left", "right") if axis == "x" else ("top", "bottom")
+            what = "width" if axis == "x" else "height"
+            p_lo, p_hi = (float(v) for v in np.percentile(vals, [2, 98]))
+            lo, hi = self.markers.get(lo_key), self.markers.get(hi_key)
+            tips = []
+            if lo < p_lo:
+                tips.append(f"the {lo_name} line ({lo:.0%}) is outside the walking area — move it inward to about {p_lo + 0.1 * (p_hi - p_lo):.0%}")
+            if hi > p_hi:
+                tips.append(f"the {hi_name} line ({hi:.0%}) is outside the walking area — move it inward to about {p_hi - 0.1 * (p_hi - p_lo):.0%}")
+            if tips:
+                return (
+                    base + f"The subject was tracked between {p_lo:.0%} and {p_hi:.0%} "
+                    f"of the frame {what}, but " + " and ".join(tips)
+                    + ". (Reset markers restores the defaults.)"
+                )
+        return base + "Move the lines onto the walking path (try Reset markers)."
+
+    def _refresh_marker_info(self) -> None:
+        """Show each line as % of the frame and in pixels of the source video.
+        Lines of the axis the current video does not use are dimmed."""
+        reader = self.player.reader
+        dims = {
+            "x": reader.info.width if reader is not None else 0,
+            "y": reader.info.height if reader is not None else 0,
+        }
+        used = set(axes_in_use(self.session.spec.directions)) if self.session else set()
+        for key, label in self.marker_info.items():
+            axis = key[0]
+            frac = self.markers.get(key)
+            px = f"  ({round(frac * dims[axis])} px)" if dims[axis] else ""
+            label.setText(f"{frac:.1%}{px}")
+            active = axis in used or not used
+            label.setStyleSheet("" if active else "color:#888;")
+
+    def reset_markers(self) -> None:
+        """Back to the default line positions (mode, swap and padding are kept)."""
+        if self.session is None or self._auto_active:
+            return
+        d = MarkerSet()
+        for key in ("x_left", "x_right", "y_top", "y_bottom"):
+            setattr(self.markers, key, d.get(key))
+        self.player.set_marker_overlay(self.markers, self._marker_labels())
+        self.player.display.update()
+        self._refresh_marker_info()
+        self._on_markers_edited()
+
+    def _begin_auto_run(self) -> bool:
         """Arm a run from the current frame with the *current* marker positions."""
         passes = find_passes(self._traj, self.markers, self.session.spec.directions)
         here = self.player.frame_index
         self._auto_queue = [p for p in passes if p.start_frame >= here]
+        if not self._auto_queue:
+            reason = (
+                self._no_pass_reason() if not passes
+                else "No pass is left after the current frame — go back to the start (drag the slider) first."
+            )
+            self.lbl_auto.setText(reason)
+            self.status.setText("Auto clip: nothing to cut.")
+            QMessageBox.information(self, "Auto clip: nothing to cut", reason)
+            return False
         self._auto_active = True
         self._auto_chain = True
         self.player.set_markers_locked(True)
-        self.btn_preview.setEnabled(False)
+        self.btn_start_clip.setText(self._PAUSE_TEXT)
+        self.btn_reset_markers.setEnabled(False)
         self.chk_flip.setEnabled(False)
         self.cmb_direction.setEnabled(False)
         self.spin_pad_lo.setEnabled(False)
@@ -973,6 +1083,7 @@ class MainWindow(QWidget):
             f"Auto clip running ({len(self._auto_queue)} pass(es) ahead). "
             "Pause to adjust the markers."
         )
+        return True
 
     def _auto_emit(self, upto: int) -> None:
         """Create clips for every detected pass that has finished by *upto*."""
@@ -1014,7 +1125,8 @@ class MainWindow(QWidget):
         self._auto_active = False
         self._auto_queue = []
         self.player.set_markers_locked(False)
-        self.btn_preview.setEnabled(True)
+        self.btn_start_clip.setText(self._START_TEXT)
+        self.btn_reset_markers.setEnabled(True)
         self.chk_flip.setEnabled(True)
         self.cmb_direction.setEnabled(True)
         self.spin_pad_lo.setEnabled(True)
@@ -1030,7 +1142,7 @@ class MainWindow(QWidget):
         else:
             msg = (
                 f"Paused: {st['added']} clip(s) so far{tail}. Adjust the markers "
-                "if needed, then press Play to continue."
+                "if needed, then press Start Clip to continue."
             )
         self.lbl_auto.setText(msg)
         self.status.setText(msg)

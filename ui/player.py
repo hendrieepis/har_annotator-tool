@@ -229,6 +229,7 @@ class VideoPlayerWidget(QWidget):
 
     frameChanged = Signal(int)
     markersEdited = Signal()   # user finished dragging a marker line
+    markersMoving = Signal()   # a marker line is being dragged (live)
     playbackStopped = Signal(bool)  # True = reached the last frame, False = paused
 
     def __init__(self, parent=None):
@@ -252,6 +253,7 @@ class VideoPlayerWidget(QWidget):
     def _build_ui(self) -> None:
         self.display = FrameView()
         self.display.markersReleased.connect(self.markersEdited)
+        self.display.markersChanged.connect(self.markersMoving)
 
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setEnabled(False)
